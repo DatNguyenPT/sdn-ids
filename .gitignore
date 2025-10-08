@@ -1,0 +1,16 @@
+# Ignore HDF5 model files
+*.h5
+
+# Ignore numpy binary files
+*.npy
+
+# Ignore data directory
+/data/
+
+# Python cache and environment files (optional but recommended)
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.env
+*.venv

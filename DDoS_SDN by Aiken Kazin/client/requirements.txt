@@ -1,0 +1,6 @@
+flwr>=1.10.0
+scikit-learn
+numpy
+pandas
+tensorflow
+xgboost
