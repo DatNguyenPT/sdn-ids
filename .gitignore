@@ -6,6 +6,10 @@
 
 # Ignore data directory
 /data/
+/DDoS_SDN by Aiken Kazin/logs
+/DDoS_SDN by Aiken Kazin/trainv2.py
+/DDoS_SDN by Aiken Kazin/train.ipynb
+/DDoS_SDN by Aiken Kazin/.DS_Store
 
 # Python cache and environment files (optional but recommended)
 __pycache__/
