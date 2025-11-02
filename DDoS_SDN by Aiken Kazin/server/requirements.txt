@@ -1,7 +1,0 @@
-flwr>=1.10.0
-scikit-learn
-numpy
-pandas
-xgboost
-flwr[dashboard]>=1.10.0
-tensorflow

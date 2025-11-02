@@ -193,7 +193,7 @@ class NNModels:
         early_stop = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
         reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5)
 
-        print(f"\n🧠 Training {name} model...")
+        print(f"\n Training {name} model...")
         history = model.fit(
             self.X_train_3d if "LSTM" in name or "CNN" in name else self.X_train,
             y_train_cat,
@@ -206,7 +206,7 @@ class NNModels:
 
         model_path = os.path.join("models", f"{name}.h5")
         model.save(model_path)
-        print(f"✅ Model saved to {model_path}")
+        print(f" Model saved to {model_path}")
 
         self.save_training_report(history, name)
         return model
@@ -317,7 +317,7 @@ class NNModels:
         img_path = os.path.join("img", f"{model_name}_curves.png")
         plt.savefig(img_path)
         plt.close()
-        print(f"📈 Saved training plot to {img_path}")
+        print(f" Saved training plot to {img_path}")
 
         # Excel report
         report_path = os.path.join("report", f"{model_name}_report.xlsx")
@@ -334,15 +334,15 @@ class NNModels:
             })
             summary.to_excel(writer, index=False, sheet_name="Summary")
 
-        print(f"📊 Report saved to {report_path}")
+        print(f" Report saved to {report_path}")
 
 
 def main():
-    print("🚀 Loading dataset...")
+    print(" Loading dataset...")
     data = pd.read_csv("dataset_sdn.csv")
     df = data.copy()
     df.columns = df.columns.str.strip().str.lower()
-    print(f"✅ Dataset loaded: {df.shape[0]} samples, {df.shape[1]} columns\n")
+    print(f" Dataset loaded: {df.shape[0]} samples, {df.shape[1]} columns\n")
 
     df = process_col(df)
     df = normalization(df)

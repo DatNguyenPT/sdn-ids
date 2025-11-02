@@ -49,12 +49,12 @@ def evaluate_model(model_name=None):
             f"Available models: {available}"
         )
 
-    print(f"📥 Loading trained model: {model_name}")
+    print(f" Loading trained model: {model_name}")
     model = load_model(model_path)
-    print(f"✅ Model loaded successfully from {model_path}")
+    print(f" Model loaded successfully from {model_path}")
 
     # === Load and preprocess dataset ===
-    print("\n📂 Loading dataset for evaluation...")
+    print("\n Loading dataset for evaluation...")
     df = pd.read_csv("dataset_sdn.csv")
     df.columns = df.columns.str.strip().str.lower()
 
@@ -67,16 +67,16 @@ def evaluate_model(model_name=None):
     if os.path.exists(feature_path):
         expected_cols = pd.read_csv(feature_path).squeeze().tolist()
         X_test = X_test.reindex(columns=expected_cols, fill_value=0)
-        print("✅ Aligned test features with training order")
+        print(" Aligned test features with training order")
     else:
         pd.Series(X_test.columns).to_csv(feature_path, index=False)
-        print("ℹ️ Saved feature order for future consistency")
+        print(" Saved feature order for future consistency")
 
-    print(f"🔍 Model expects input shape: {model.input_shape}")
-    print(f"🔍 X_test shape: {X_test.shape}")
+    print(f" Model expects input shape: {model.input_shape}")
+    print(f" X_test shape: {X_test.shape}")
 
     # === Evaluate ===
-    print("\n⚙️ Running evaluation...")
+    print("\n Running evaluation...")
     y_pred_probs = model.predict(X_test, verbose=0)
     y_pred = np.argmax(y_pred_probs, axis=1)
 
@@ -85,7 +85,7 @@ def evaluate_model(model_name=None):
     rec = recall_score(y_test, y_pred, average='weighted', zero_division=0)
     f1 = f1_score(y_test, y_pred, average='weighted', zero_division=0)
 
-    print("\n✅ Evaluation complete!")
+    print("\n Evaluation complete!")
     print(f"   Accuracy : {acc:.4f}")
     print(f"   Precision: {prec:.4f}")
     print(f"   Recall   : {rec:.4f}")
@@ -107,7 +107,7 @@ def evaluate_model(model_name=None):
     cm_path = os.path.join("img", f"confusion_matrix_{model_name}_{timestamp}.png")
     plt.savefig(cm_path)
     plt.close()
-    print(f"📊 Confusion matrix saved to {cm_path}")
+    print(f" Confusion matrix saved to {cm_path}")
 
     # === Classification Report ===
     cls_report = classification_report(y_test, y_pred, output_dict=True)
@@ -123,7 +123,7 @@ def evaluate_model(model_name=None):
         summary_df.to_excel(writer, index=False, sheet_name="Summary")
         cls_df.to_excel(writer, sheet_name="Class_Report")
 
-    print(f"📘 Evaluation report saved to {report_path}")
+    print(f" Evaluation report saved to {report_path}")
 
     # === Return for automation ===
     return {
@@ -143,16 +143,16 @@ def main():
         model_name = sys.argv[1] if len(sys.argv) > 1 else None
         results = evaluate_model(model_name)
 
-        print("\n📈 Final Results:")
+        print("\n Final Results:")
         for k, v in results.items():
             if k not in ["report_path", "confusion_matrix_path", "model"]:
                 print(f"   {k:<10}: {v:.4f}")
-        print(f"\n📘 Report : {results['report_path']}")
-        print(f"🖼️  Matrix : {results['confusion_matrix_path']}")
-        print("\n✅ Evaluation pipeline finished successfully!\n")
+        print(f"\n Report : {results['report_path']}")
+        print(f"  Matrix : {results['confusion_matrix_path']}")
+        print("\n Evaluation pipeline finished successfully!\n")
 
     except Exception as e:
-        print(f"\n❌ Error during evaluation: {e}")
+        print(f"\n Error during evaluation: {e}")
 
 
 if __name__ == "__main__":
