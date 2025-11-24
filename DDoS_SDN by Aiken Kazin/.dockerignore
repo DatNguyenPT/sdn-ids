@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Data and models (not needed for server)
+models/
+dataset_sdn.csv
+*.h5
+*.pkl
+*.pth
+
+# Reports and logs
+report/
+logs/
+img/
+*.xlsx
+*.png
+*.jpg
+*.jpeg
+
+# Jupyter notebooks
+*.ipynb
+.ipynb_checkpoints/
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+*.md
+!README_FL.md
+
+# Scripts not needed in container
+train.py
+evaluate.py
+send_params.py
+train_evaluate.sh
+setup_flower.sh
+xgboost.ipynb
+train.ipynb
+# Note: preprocess.py is needed by workers, so it's NOT ignored
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+

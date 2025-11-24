@@ -1,0 +1,31 @@
+# FL Dashboard Dockerfile
+FROM python:3.10-slim
+
+# Set working directory
+WORKDIR /app
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+    flask>=2.0.0 \
+    flask-cors>=3.0.0 \
+    requests>=2.25.0
+
+# Copy dashboard script
+COPY fl_dashboard.py .
+
+# Expose dashboard port
+EXPOSE 5000
+
+# Run dashboard
+CMD ["python", "fl_dashboard.py", "--host", "0.0.0.0", "--port", "5000"]
+

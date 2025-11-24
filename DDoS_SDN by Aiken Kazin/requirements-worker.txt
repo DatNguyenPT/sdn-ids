@@ -1,0 +1,13 @@
+# Requirements for Flower Workers
+# Workers need the full ML stack including TensorFlow
+
+flwr>=1.0.0
+tensorflow>=2.0.0
+numpy>=1.20.0
+pandas>=1.3.0
+scikit-learn>=1.0.0
+imblearn>=0.0
+matplotlib>=3.3.0
+seaborn>=0.11.0
+openpyxl>=3.0.0
+

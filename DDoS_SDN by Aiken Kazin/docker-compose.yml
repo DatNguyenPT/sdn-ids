@@ -1,0 +1,365 @@
+services:
+  # Flower Server for MLPv2 - Coordinates federated learning for MLPv2 model
+  flower-server-mlpv2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: flower-server-mlpv2
+    image: flower-server:latest
+    ports:
+      - "8080:8080"
+    environment:
+      - FL_SERVER_ADDRESS=0.0.0.0:8080
+      - FL_MIN_CLIENTS=2
+      - FL_NUM_ROUNDS=5
+      - FL_FRACTION_FIT=1.0
+      - FL_FRACTION_EVALUATE=1.0
+      - FL_DASHBOARD_URL=http://fl-dashboard:5000
+    command: python flower_server_metrics.py --address 0.0.0.0 --port 8080 --min-clients 2 --num-rounds 5 --fraction-fit 1.0 --fraction-evaluate 1.0 --dashboard-url http://fl-dashboard:5000 --model-type MLPv2 --models-dir /app/models
+    restart: "no"
+    networks:
+      - flower-network
+    depends_on:
+      - fl-dashboard
+    volumes:
+      - ./models:/app/models
+
+  # Flower Server for CNN1D - Coordinates federated learning for CNN1D model
+  flower-server-cnn1d:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: flower-server-cnn1d
+    image: flower-server:latest
+    ports:
+      - "8081:8080"
+    environment:
+      - FL_SERVER_ADDRESS=0.0.0.0:8080
+      - FL_MIN_CLIENTS=2
+      - FL_NUM_ROUNDS=5
+      - FL_FRACTION_FIT=1.0
+      - FL_FRACTION_EVALUATE=1.0
+      - FL_DASHBOARD_URL=http://fl-dashboard:5000
+    command: python flower_server_metrics.py --address 0.0.0.0 --port 8080 --min-clients 2 --num-rounds 5 --fraction-fit 1.0 --fraction-evaluate 1.0 --dashboard-url http://fl-dashboard:5000 --model-type CNN1D --models-dir /app/models
+    restart: "no"
+    networks:
+      - flower-network
+    depends_on:
+      - fl-dashboard
+    volumes:
+      - ./models:/app/models
+
+  # Flower Server for LSTM - Coordinates federated learning for LSTM model
+  flower-server-lstm:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: flower-server-lstm
+    image: flower-server:latest
+    ports:
+      - "8082:8080"
+    environment:
+      - FL_SERVER_ADDRESS=0.0.0.0:8080
+      - FL_MIN_CLIENTS=2
+      - FL_NUM_ROUNDS=5
+      - FL_FRACTION_FIT=1.0
+      - FL_FRACTION_EVALUATE=1.0
+      - FL_DASHBOARD_URL=http://fl-dashboard:5000
+    command: python flower_server_metrics.py --address 0.0.0.0 --port 8080 --min-clients 2 --num-rounds 5 --fraction-fit 1.0 --fraction-evaluate 1.0 --dashboard-url http://fl-dashboard:5000 --model-type LSTM --models-dir /app/models
+    restart: "no"
+    networks:
+      - flower-network
+    depends_on:
+      - fl-dashboard
+    volumes:
+      - ./models:/app/models
+
+  # Flower Server for CNN_LSTM - Coordinates federated learning for CNN_LSTM model
+  flower-server-cnn_lstm:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: flower-server-cnn_lstm
+    image: flower-server:latest
+    ports:
+      - "8083:8080"
+    environment:
+      - FL_SERVER_ADDRESS=0.0.0.0:8080
+      - FL_MIN_CLIENTS=2
+      - FL_NUM_ROUNDS=5
+      - FL_FRACTION_FIT=1.0
+      - FL_FRACTION_EVALUATE=1.0
+      - FL_DASHBOARD_URL=http://fl-dashboard:5000
+    command: python flower_server_metrics.py --address 0.0.0.0 --port 8080 --min-clients 2 --num-rounds 5 --fraction-fit 1.0 --fraction-evaluate 1.0 --dashboard-url http://fl-dashboard:5000 --model-type CNN_LSTM --models-dir /app/models
+    restart: "no"
+    networks:
+      - flower-network
+    depends_on:
+      - fl-dashboard
+    volumes:
+      - ./models:/app/models
+
+  # FL Dashboard - Visualization dashboard
+  fl-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    container_name: fl-dashboard
+    image: fl-dashboard:latest
+    ports:
+      - "5001:5000"
+    restart: unless-stopped
+    networks:
+      - flower-network
+
+  # Worker 1 - MLPv2 (first worker)
+  flower-worker-1:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: flower-worker-1
+    image: flower-worker:latest
+    environment:
+      - FL_SERVER_ADDRESS=flower-server-mlpv2:8080
+      - FL_WORKER_ID=worker1-mlpv2
+      - FL_DATA_PARTITION=0.5
+      - FL_MODEL_TYPE=MLPv2
+      - FL_EPOCHS_PER_ROUND=5
+      - FL_BATCH_SIZE=32
+    command: >
+      python flower_worker.py
+      --server-address flower-server-mlpv2:8080
+      --worker-id worker1-mlpv2
+      --data-partition 0.5
+      --model-type MLPv2
+      --epochs-per-round 5
+      --batch-size 32
+      --total-rounds 5
+    depends_on:
+      - flower-server-mlpv2
+    restart: "no"
+    networks:
+      - flower-network
+    volumes:
+      - ./dataset_sdn.csv:/app/dataset_sdn.csv:ro
+
+  # Worker 2 - MLPv2 (second worker)
+  flower-worker-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: flower-worker-2
+    image: flower-worker:latest
+    environment:
+      - FL_SERVER_ADDRESS=flower-server-mlpv2:8080
+      - FL_WORKER_ID=worker2-mlpv2
+      - FL_DATA_PARTITION=0.5
+      - FL_MODEL_TYPE=MLPv2
+      - FL_EPOCHS_PER_ROUND=5
+      - FL_BATCH_SIZE=32
+    command: >
+      python flower_worker.py
+      --server-address flower-server-mlpv2:8080
+      --worker-id worker2-mlpv2
+      --data-partition 0.5
+      --model-type MLPv2
+      --epochs-per-round 5
+      --batch-size 32
+      --total-rounds 5
+    depends_on:
+      - flower-server-mlpv2
+    restart: "no"
+    networks:
+      - flower-network
+    volumes:
+      - ./dataset_sdn.csv:/app/dataset_sdn.csv:ro
+
+  # Worker 3 - CNN1D (first worker)
+  flower-worker-3:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: flower-worker-3
+    image: flower-worker:latest
+    environment:
+      - FL_SERVER_ADDRESS=flower-server-cnn1d:8080
+      - FL_WORKER_ID=worker1-cnn1d
+      - FL_DATA_PARTITION=0.5
+      - FL_MODEL_TYPE=CNN1D
+      - FL_EPOCHS_PER_ROUND=5
+      - FL_BATCH_SIZE=32
+    command: >
+      python flower_worker.py
+      --server-address flower-server-cnn1d:8080
+      --worker-id worker1-cnn1d
+      --data-partition 0.5
+      --model-type CNN1D
+      --epochs-per-round 5
+      --batch-size 32
+      --total-rounds 5
+    depends_on:
+      - flower-server-cnn1d
+    restart: "no"
+    networks:
+      - flower-network
+    volumes:
+      - ./dataset_sdn.csv:/app/dataset_sdn.csv:ro
+
+  # Worker 4 - CNN1D (second worker)
+  flower-worker-4:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: flower-worker-4
+    image: flower-worker:latest
+    environment:
+      - FL_SERVER_ADDRESS=flower-server-cnn1d:8080
+      - FL_WORKER_ID=worker2-cnn1d
+      - FL_DATA_PARTITION=0.5
+      - FL_MODEL_TYPE=CNN1D
+      - FL_EPOCHS_PER_ROUND=5
+      - FL_BATCH_SIZE=32
+    command: >
+      python flower_worker.py
+      --server-address flower-server-cnn1d:8080
+      --worker-id worker2-cnn1d
+      --data-partition 0.5
+      --model-type CNN1D
+      --epochs-per-round 5
+      --batch-size 32
+      --total-rounds 5
+    depends_on:
+      - flower-server-cnn1d
+    restart: "no"
+    networks:
+      - flower-network
+    volumes:
+      - ./dataset_sdn.csv:/app/dataset_sdn.csv:ro
+
+  # Worker 5 - LSTM (first worker)
+  flower-worker-5:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: flower-worker-5
+    image: flower-worker:latest
+    environment:
+      - FL_SERVER_ADDRESS=flower-server-lstm:8080
+      - FL_WORKER_ID=worker1-lstm
+      - FL_DATA_PARTITION=0.5
+      - FL_MODEL_TYPE=LSTM
+      - FL_EPOCHS_PER_ROUND=5
+      - FL_BATCH_SIZE=32
+    command: >
+      python flower_worker.py
+      --server-address flower-server-lstm:8080
+      --worker-id worker1-lstm
+      --data-partition 0.5
+      --model-type LSTM
+      --epochs-per-round 5
+      --batch-size 32
+      --total-rounds 5
+    depends_on:
+      - flower-server-lstm
+    restart: "no"
+    networks:
+      - flower-network
+    volumes:
+      - ./dataset_sdn.csv:/app/dataset_sdn.csv:ro
+
+  # Worker 6 - LSTM (second worker)
+  flower-worker-6:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: flower-worker-6
+    image: flower-worker:latest
+    environment:
+      - FL_SERVER_ADDRESS=flower-server-lstm:8080
+      - FL_WORKER_ID=worker2-lstm
+      - FL_DATA_PARTITION=0.5
+      - FL_MODEL_TYPE=LSTM
+      - FL_EPOCHS_PER_ROUND=5
+      - FL_BATCH_SIZE=32
+    command: >
+      python flower_worker.py
+      --server-address flower-server-lstm:8080
+      --worker-id worker2-lstm
+      --data-partition 0.5
+      --model-type LSTM
+      --epochs-per-round 5
+      --batch-size 32
+      --total-rounds 5
+    depends_on:
+      - flower-server-lstm
+    restart: "no"
+    networks:
+      - flower-network
+    volumes:
+      - ./dataset_sdn.csv:/app/dataset_sdn.csv:ro
+
+  # Worker 7 - CNN_LSTM (first worker)
+  flower-worker-7:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: flower-worker-7
+    image: flower-worker:latest
+    environment:
+      - FL_SERVER_ADDRESS=flower-server-cnn_lstm:8080
+      - FL_WORKER_ID=worker1-cnn_lstm
+      - FL_DATA_PARTITION=0.5
+      - FL_MODEL_TYPE=CNN_LSTM
+      - FL_EPOCHS_PER_ROUND=5
+      - FL_BATCH_SIZE=32
+    command: >
+      python flower_worker.py
+      --server-address flower-server-cnn_lstm:8080
+      --worker-id worker1-cnn_lstm
+      --data-partition 0.5
+      --model-type CNN_LSTM
+      --epochs-per-round 5
+      --batch-size 32
+      --total-rounds 5
+    depends_on:
+      - flower-server-cnn_lstm
+    restart: "no"
+    networks:
+      - flower-network
+    volumes:
+      - ./dataset_sdn.csv:/app/dataset_sdn.csv:ro
+
+  # Worker 8 - CNN_LSTM (second worker)
+  flower-worker-8:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: flower-worker-8
+    image: flower-worker:latest
+    environment:
+      - FL_SERVER_ADDRESS=flower-server-cnn_lstm:8080
+      - FL_WORKER_ID=worker2-cnn_lstm
+      - FL_DATA_PARTITION=0.5
+      - FL_MODEL_TYPE=CNN_LSTM
+      - FL_EPOCHS_PER_ROUND=5
+      - FL_BATCH_SIZE=32
+    command: >
+      python flower_worker.py
+      --server-address flower-server-cnn_lstm:8080
+      --worker-id worker2-cnn_lstm
+      --data-partition 0.5
+      --model-type CNN_LSTM
+      --epochs-per-round 5
+      --batch-size 32
+      --total-rounds 5
+    depends_on:
+      - flower-server-cnn_lstm
+    restart: "no"
+    networks:
+      - flower-network
+    volumes:
+      - ./dataset_sdn.csv:/app/dataset_sdn.csv:ro
+
+networks:
+  flower-network:
+    driver: bridge

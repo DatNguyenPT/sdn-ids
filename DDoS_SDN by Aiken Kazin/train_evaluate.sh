@@ -10,10 +10,15 @@ IFS=$'\n\t'
 VENV_PATH=".venv"
 TRAIN_SCRIPT="train.py"
 EVAL_SCRIPT="evaluate.py"
+SEND_PARAMS_SCRIPT="send_params.py"
 LOG_DIR="logs"
 MODEL_DIR="models"
 REPORT_DIR="report"
 IMG_DIR="img"
+
+# Federated Learning configuration (can be overridden via environment variables)
+FL_SERVER_ADDRESS="${FL_SERVER_ADDRESS:-localhost:8080}"  # Flower server address (host:port)
+SEND_FL_PARAMS="${SEND_FL_PARAMS:-true}"  # Set to "false" to skip sending FL parameters
 
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 LOG_FILE="${LOG_DIR}/pipeline_${TIMESTAMP}.log"
@@ -88,6 +93,28 @@ else
     echo -e "${YELLOW}  No confusion matrix image found${RESET}"
 fi
 
+# === Send Federated Learning Parameters ===
+if [ "$SEND_FL_PARAMS" = "true" ]; then
+    echo -e "\n${BLUE} Sending Federated Learning parameters to Flower server...${RESET}"
+    echo -e " Server Address: ${YELLOW}${FL_SERVER_ADDRESS}${RESET}"
+    
+    if [ -f "$SEND_PARAMS_SCRIPT" ]; then
+        FL_SERVER_ADDRESS="$FL_SERVER_ADDRESS" python "$SEND_PARAMS_SCRIPT" "$MODEL_NAME" | tee -a "$LOG_FILE"
+        SEND_EXIT_CODE=${PIPESTATUS[0]}
+        
+        if [ $SEND_EXIT_CODE -eq 0 ]; then
+            echo -e "${GREEN} FL parameters sent successfully${RESET}"
+        else
+            echo -e "${YELLOW} Warning: Failed to send FL parameters (exit code: $SEND_EXIT_CODE)${RESET}"
+            echo -e "${YELLOW} Make sure Flower server is running: flwr server --address $(echo $FL_SERVER_ADDRESS | cut -d: -f1) --port $(echo $FL_SERVER_ADDRESS | cut -d: -f2)${RESET}"
+        fi
+    else
+        echo -e "${YELLOW} Warning: send_params.py not found, skipping FL parameter sending${RESET}"
+    fi
+else
+    echo -e "\n${YELLOW} Skipping FL parameter sending (SEND_FL_PARAMS=false)${RESET}"
+fi
+
 # === Completion summary ===
 echo -e "\n${BLUE}============================================${RESET}"
 echo -e "${GREEN} Pipeline completed successfully!${RESET}"
@@ -95,4 +122,7 @@ echo -e " Logs:    ${YELLOW}${LOG_FILE}${RESET}"
 echo -e " Models:  ${YELLOW}${MODEL_DIR}${RESET}"
 echo -e " Reports: ${YELLOW}${REPORT_DIR}${RESET}"
 echo -e " Images:  ${YELLOW}${IMG_DIR}${RESET}"
+if [ "$SEND_FL_PARAMS" = "true" ]; then
+    echo -e " FL Server: ${YELLOW}${FL_SERVER_ADDRESS}${RESET}"
+fi
 echo -e "${BLUE}============================================${RESET}\n"
