@@ -124,8 +124,9 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      max-parallel: 2  # Build max 2 models at a time to save disk space
       matrix:
-        # Train all models in parallel
+        # Train models (2 at a time to avoid disk space issues)
         model_type: [MLPv2, LSTM, CNN1D, CNN_LSTM]
     
     steps:
@@ -139,6 +140,16 @@ jobs:
         run: |
           docker --version
           docker compose version
+          echo "📊 Initial disk space:"
+          df -h
+      
+      - name: Clean Docker before starting
+        run: |
+          # Remove unused containers, networks, images
+          docker system prune -af --volumes || true
+          docker builder prune -af || true
+          echo "📊 Disk space after cleanup:"
+          df -h
       
       - name: Change to project directory
         run: |
@@ -180,6 +191,12 @@ jobs:
           sleep 5
         continue-on-error: true
       
+      - name: Clean Docker system (free disk space)
+        run: |
+          docker system prune -f || true
+          docker builder prune -f || true
+          df -h
+      
       - name: Start FL infrastructure for ${{ matrix.model_type }}
         working-directory: "DDoS_SDN by Aiken Kazin"
         run: |
@@ -191,19 +208,40 @@ jobs:
           # Create models directory if it doesn't exist
           mkdir -p models
           
+          # Check disk space
+          echo "📊 Disk space before starting services:"
+          df -h
+          
           # Start only the required services for this model type
           # Start dashboard and MLflow first (dependencies)
-          docker compose up -d fl-dashboard mlflow-server
+          # Try to use existing images first, build only if needed
+          if ! docker compose up -d fl-dashboard mlflow-server 2>/dev/null; then
+            echo "Building dashboard and MLflow..."
+            docker compose build fl-dashboard mlflow-server
+            docker compose up -d fl-dashboard mlflow-server
+            docker builder prune -f || true
+          fi
           
           # Wait for dependencies to be ready
           echo "Waiting for dashboard and MLflow to be ready..."
           sleep 10
           
-          # Start the specific model's server
+          # Start the specific model's server - BUILD ONLY THIS ONE
           # Server names in docker-compose: flower-server-mlpv2, flower-server-cnn1d, 
           # flower-server-lstm, flower-server-cnn_lstm
           MODEL_TYPE_LOWER=$(echo "${{ matrix.model_type }}" | tr '[:upper:]' '[:lower:]')
-          docker compose up -d --build flower-server-$MODEL_TYPE_LOWER
+          
+          # Build server image first (single build)
+          echo "🔨 Building server image for ${{ matrix.model_type }}..."
+          docker compose build flower-server-$MODEL_TYPE_LOWER
+          
+          # Start server
+          docker compose up -d flower-server-$MODEL_TYPE_LOWER
+          
+          # Clean up build cache after building server
+          docker builder prune -f || true
+          echo "📊 Disk space after server build:"
+          df -h
           
           # Wait for server to be ready
           echo "Waiting for FL server to be ready..."
@@ -243,14 +281,27 @@ jobs:
           echo "✅ Server: flower-server-$MODEL_TYPE_LOWER"
           echo "✅ Workers: $WORKERS"
           
-          echo "Starting workers: $WORKERS"
-          docker compose up -d $WORKERS
+          # Build workers one at a time to save disk space
+          echo "🔨 Building worker images (one at a time to save space)..."
+          for worker in $WORKERS; do
+            echo "Building $worker..."
+            docker compose build $worker
+            docker compose up -d $worker
+            # Clean up after each build
+            docker builder prune -f || true
+            echo "📊 Disk space after $worker:"
+            df -h
+            sleep 2
+          done
           
           # Wait for workers to connect
           sleep 10
           
-          # Show status
+          # Show status and disk space
+          echo "📊 Container status:"
           docker compose ps
+          echo "📊 Disk space after starting services:"
+          df -h
         env:
           FL_MODEL_TYPE: ${{ matrix.model_type }}
       
@@ -311,6 +362,10 @@ jobs:
         working-directory: "DDoS_SDN by Aiken Kazin"
         run: |
           docker compose down -v || true
+          docker system prune -af || true
+          docker builder prune -af || true
+          echo "📊 Final disk space:"
+          df -h
 
   # Job 4: Model Evaluation (runs after training)
   evaluate-models:
