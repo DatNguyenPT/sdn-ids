@@ -371,11 +371,26 @@ class MetricsFedAvg(FedAvg):
                         self.num_classes = worker_num_classes
                         logger.debug(f"Updated num_classes from worker: {self.num_classes}")
             
+            # Forward DP metrics from worker to dashboard
+            dp_metrics = {}
+            if fit_res.metrics:
+                if "dp_enabled" in fit_res.metrics:
+                    dp_metrics["dp_enabled"] = fit_res.metrics["dp_enabled"]
+                if "epsilon_this_round" in fit_res.metrics:
+                    dp_metrics["epsilon_this_round"] = fit_res.metrics["epsilon_this_round"]
+                if "epsilon_total" in fit_res.metrics:
+                    dp_metrics["epsilon_total"] = fit_res.metrics["epsilon_total"]
+                if "dp_clip_norm" in fit_res.metrics:
+                    dp_metrics["dp_clip_norm"] = fit_res.metrics["dp_clip_norm"]
+                if "dp_noise_multiplier" in fit_res.metrics:
+                    dp_metrics["dp_noise_multiplier"] = fit_res.metrics["dp_noise_multiplier"]
+            
             self._send_to_dashboard({
                 "round": rnd,
                 "worker_id": worker_id,
                 "active": True,
-                "model_type": model_type
+                "model_type": model_type,
+                **dp_metrics  # Include DP metrics if present
             })
         
         # Send model params count to dashboard

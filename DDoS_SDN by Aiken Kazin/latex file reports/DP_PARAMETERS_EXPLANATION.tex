@@ -1,0 +1,442 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{geometry}
+\geometry{margin=1in}
+
+\title{Differential Privacy Parameters in Federated Learning DDoS Detection}
+\author{Federated Learning Project}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+
+This document explains the Differential Privacy (DP) parameters used in our Federated Learning system for DDoS detection. We implement DP-SGD (Differentially Private Stochastic Gradient Descent) to protect individual training samples while maintaining model utility.
+
+\section{Differential Privacy Parameters}
+
+\subsection{Overview}
+
+Our implementation uses four key parameters to control the privacy-accuracy trade-off:
+
+\begin{itemize}
+    \item \textbf{Clip Norm} ($C$): Gradient clipping threshold
+    \item \textbf{Noise Multiplier} ($z$): Controls noise magnitude
+    \item \textbf{Delta} ($\delta$): Failure probability
+    \item \textbf{Epsilon} ($\epsilon$): Privacy budget (calculated)
+\end{itemize}
+
+\subsection{Clip Norm (dp\_clip\_norm = 1.0)}
+
+\subsubsection{Definition}
+
+Clip Norm, denoted as $C$, is the maximum L2 norm allowed for gradient vectors. It bounds the sensitivity of gradients to individual training samples.
+
+\subsubsection{Mathematical Formulation}
+
+For a gradient vector $\mathbf{g}$, clipping is performed as:
+
+\begin{equation}
+\mathbf{g}_{\text{clipped}} = \mathbf{g} \cdot \min\left(1, \frac{C}{\|\mathbf{g}\|_2}\right)
+\end{equation}
+
+where $\|\mathbf{g}\|_2$ is the L2 norm of the gradient.
+
+\subsubsection{Implementation in Our Project}
+
+In \texttt{flower\_worker.py}, clip norm is set during worker initialization:
+
+\begin{lstlisting}[language=Python, basicstyle=\small]
+dp_clip_norm: float = 1.0  # Default value
+\end{lstlisting}
+
+The DP-SGD optimizer uses this value:
+
+\begin{lstlisting}[language=Python, basicstyle=\small]
+optimizer = DPKerasAdamOptimizer(
+    l2_norm_clip=self.dp_clip_norm,  # C = 1.0
+    noise_multiplier=self.dp_noise_multiplier,
+    num_microbatches=1,
+    learning_rate=0.001
+)
+\end{lstlisting}
+
+\subsubsection{Impact}
+
+\begin{itemize}
+    \item \textbf{Lower $C$ (e.g., 0.5)}: Stronger privacy, slower convergence, lower accuracy
+    \item \textbf{Higher $C$ (e.g., 2.0)}: Weaker privacy, faster convergence, higher accuracy
+    \item \textbf{Our setting ($C = 1.0$)}: Balanced trade-off
+\end{itemize}
+
+\subsection{Noise Multiplier (dp\_noise\_multiplier = 1.0)}
+
+\subsubsection{Definition}
+
+Noise Multiplier, denoted as $z$, controls the magnitude of Gaussian noise added to gradients. It determines the standard deviation of the noise distribution.
+
+\subsubsection{Mathematical Formulation}
+
+After clipping, Gaussian noise is added:
+
+\begin{equation}
+\mathbf{g}_{\text{noisy}} = \mathbf{g}_{\text{clipped}} + \mathcal{N}(0, (C \cdot z)^2 \mathbf{I})
+\end{equation}
+
+where:
+\begin{itemize}
+    \item $C$ is the clip norm
+    \item $z$ is the noise multiplier
+    \item $\mathcal{N}(0, \sigma^2)$ is a Gaussian distribution with mean 0 and variance $\sigma^2$
+\end{itemize}
+
+With our settings ($C = 1.0$, $z = 1.0$), noise variance is:
+
+\begin{equation}
+\sigma^2 = (1.0 \times 1.0)^2 = 1.0
+\end{equation}
+
+\subsubsection{Implementation}
+
+\begin{lstlisting}[language=Python, basicstyle=\small]
+dp_noise_multiplier: float = 1.0  # Default value
+
+optimizer = DPKerasAdamOptimizer(
+    l2_norm_clip=self.dp_clip_norm,
+    noise_multiplier=self.dp_noise_multiplier,  # z = 1.0
+    ...
+)
+\end{lstlisting}
+
+\subsubsection{Impact}
+
+\begin{itemize}
+    \item \textbf{Lower $z$ (e.g., 0.5)}: Less noise, weaker privacy, higher accuracy
+    \item \textbf{Higher $z$ (e.g., 2.0)}: More noise, stronger privacy, lower accuracy
+    \item \textbf{Our setting ($z = 1.0$)}: Standard noise level
+\end{itemize}
+
+\subsection{Delta (dp\_delta = 1e-5)}
+
+\subsubsection{Definition}
+
+Delta ($\delta$) is the failure probability in the $(\epsilon, \delta)$-differential privacy guarantee. It represents the probability that the privacy guarantee fails.
+
+\subsubsection{Mathematical Meaning}
+
+The $(\epsilon, \delta)$-DP guarantee states:
+
+\begin{equation}
+\mathbb{P}[M(D) \in S] \leq e^{\epsilon} \cdot \mathbb{P}[M(D') \in S] + \delta
+\end{equation}
+
+where:
+\begin{itemize}
+    \item $M$ is the mechanism (our training algorithm)
+    \item $D$ and $D'$ are datasets differing by one sample
+    \item $S$ is any subset of possible outputs
+    \item $\delta$ is the failure probability
+\end{itemize}
+
+\subsubsection{Implementation}
+
+\begin{lstlisting}[language=Python, basicstyle=\small]
+dp_delta: float = 1e-5  # Default: 0.00001 = 0.001%
+
+epsilon_this_round, _ = compute_dp_sgd_privacy(
+    n=num_samples,
+    batch_size=self.batch_size,
+    noise_multiplier=self.dp_noise_multiplier,
+    epochs=self.epochs_per_round,
+    delta=self.dp_delta  # δ = 1e-5
+)
+\end{lstlisting}
+
+\subsubsection{Interpretation}
+
+With $\delta = 10^{-5}$:
+\begin{itemize}
+    \item Privacy guarantee holds with probability $1 - \delta = 99.999\%$
+    \item Failure probability: 0.001\%
+    \item Standard choice for datasets with $\sim 10^5$ samples
+\end{itemize}
+
+\subsubsection{Common Values}
+
+\begin{itemize}
+    \item $\delta = 1/n$: Where $n$ is the number of training samples
+    \item $\delta = 10^{-5}$: Standard for medium datasets (our choice)
+    \item $\delta = 10^{-6}$: Stricter, for larger datasets
+\end{itemize}
+
+\subsection{Epsilon (ε) - Privacy Budget}
+
+\subsubsection{Definition}
+
+Epsilon ($\epsilon$) is the privacy loss parameter. It quantifies how much information about individual samples can be inferred from the model output.
+
+\subsubsection{Calculation}
+
+Epsilon is calculated using the DP-SGD privacy accounting formula:
+
+\begin{equation}
+\epsilon = f(n, \text{batch\_size}, z, \text{epochs}, \delta)
+\end{equation}
+
+where:
+\begin{itemize}
+    \item $n$: Number of training samples
+    \item $\text{batch\_size}$: Samples per batch (32 in our case)
+    \item $z$: Noise multiplier (1.0)
+    \item $\text{epochs}$: Training epochs per round (5)
+    \item $\delta$: Failure probability (1e-5)
+\end{itemize}
+
+\subsubsection{Implementation}
+
+In our code, epsilon is computed after each training round:
+
+\begin{lstlisting}[language=Python, basicstyle=\small]
+epsilon_this_round, _ = compute_dp_sgd_privacy(
+    n=num_samples,              # e.g., 41,738 samples
+    batch_size=self.batch_size,  # 32
+    noise_multiplier=self.dp_noise_multiplier,  # 1.0
+    epochs=self.epochs_per_round,  # 5
+    delta=self.dp_delta  # 1e-5
+)
+self.epsilon_spent += epsilon_this_round
+\end{lstlisting}
+
+\subsubsection{Current Values}
+
+With our settings:
+\begin{itemize}
+    \item Samples per worker: $\sim 41,738$
+    \item Batch size: 32
+    \item Epochs per round: 5
+    \item Noise multiplier: 1.0
+    \item \textbf{Epsilon per round}: $\approx 0.7$
+    \item \textbf{Total epsilon (5 rounds)}: $\approx 3.5$
+\end{itemize}
+
+\subsubsection{Interpretation}
+
+\begin{itemize}
+    \item $\epsilon = 0$: Perfect privacy (no information released)
+    \item $\epsilon = 1$: Very strong privacy
+    \item $\epsilon = 3-5$: Moderate privacy (our range)
+    \item $\epsilon = 10$: Weak privacy
+    \item $\epsilon > 100$: Essentially no privacy
+\end{itemize}
+
+\section{How Parameters Work Together}
+
+\subsection{DP-SGD Algorithm Flow}
+
+The complete DP-SGD process in our implementation:
+
+\begin{enumerate}
+    \item \textbf{Forward Pass}: Compute predictions and loss
+    \item \textbf{Backward Pass}: Compute gradients $\mathbf{g}$
+    \item \textbf{Clipping}: $\mathbf{g}_{\text{clipped}} = \text{clip}(\mathbf{g}, C)$
+    \item \textbf{Noise Addition}: $\mathbf{g}_{\text{noisy}} = \mathbf{g}_{\text{clipped}} + \mathcal{N}(0, (C \cdot z)^2)$
+    \item \textbf{Update}: $\mathbf{w}_{t+1} = \mathbf{w}_t - \eta \cdot \mathbf{g}_{\text{noisy}}$
+    \item \textbf{Privacy Accounting}: Compute $\epsilon$ spent
+\end{enumerate}
+
+\subsection{Privacy-Accuracy Trade-off}
+
+The relationship between parameters and outcomes:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|c|c|c|}
+\hline
+\textbf{Parameter Change} & \textbf{Privacy} & \textbf{Accuracy} & \textbf{Convergence} \\
+\hline
+Increase Clip Norm ($C \uparrow$) & $\downarrow$ & $\uparrow$ & $\uparrow$ \\
+Decrease Clip Norm ($C \downarrow$) & $\uparrow$ & $\downarrow$ & $\downarrow$ \\
+Increase Noise Mult ($z \uparrow$) & $\uparrow$ & $\downarrow$ & $\downarrow$ \\
+Decrease Noise Mult ($z \downarrow$) & $\downarrow$ & $\uparrow$ & $\uparrow$ \\
+\hline
+\end{tabular}
+\caption{Parameter Impact on System Performance}
+\end{table}
+
+\section{Implementation in Our Project}
+
+\subsection{Worker-Side DP}
+
+DP is implemented at the worker level in \texttt{flower\_worker.py}:
+
+\begin{lstlisting}[language=Python, basicstyle=\small]
+class FlowerWorker(fl.client.NumPyClient):
+    def __init__(self, ..., enable_dp=False, 
+                 dp_clip_norm=1.0, 
+                 dp_noise_multiplier=1.0, 
+                 dp_delta=1e-5):
+        self.enable_dp = enable_dp and DP_AVAILABLE
+        self.dp_clip_norm = dp_clip_norm
+        self.dp_noise_multiplier = dp_noise_multiplier
+        self.dp_delta = dp_delta
+        self.epsilon_spent = 0.0
+\end{lstlisting}
+
+\subsection{DP Optimizer Usage}
+
+When DP is enabled, the model uses DP-SGD optimizer:
+
+\begin{lstlisting}[language=Python, basicstyle=\small]
+if self.enable_dp:
+    optimizer = DPKerasAdamOptimizer(
+        l2_norm_clip=self.dp_clip_norm,      # C = 1.0
+        noise_multiplier=self.dp_noise_multiplier,  # z = 1.0
+        num_microbatches=1,
+        learning_rate=0.001
+    )
+else:
+    optimizer = Adam(learning_rate=0.001)
+\end{lstlisting}
+
+\subsection{Privacy Budget Tracking}
+
+After each training round, epsilon is computed and accumulated:
+
+\begin{lstlisting}[language=Python, basicstyle=\small]
+if self.enable_dp and compute_dp_sgd_privacy is not None:
+    epsilon_this_round, _ = compute_dp_sgd_privacy(
+        n=num_samples,
+        batch_size=self.batch_size,
+        noise_multiplier=self.dp_noise_multiplier,
+        epochs=self.epochs_per_round,
+        delta=self.dp_delta
+    )
+    self.epsilon_spent += epsilon_this_round
+\end{lstlisting}
+
+\subsection{Environment Variable Control}
+
+DP can be enabled/disabled via environment variable:
+
+\begin{lstlisting}[language=bash, basicstyle=\small]
+# Enable DP
+FL_ENABLE_DP=true docker compose up -d
+
+# Disable DP (default)
+FL_ENABLE_DP=false docker compose up -d
+\end{lstlisting}
+
+\section{Privacy Budget Accumulation}
+
+\subsection{Per-Round Epsilon}
+
+Each training round consumes privacy budget:
+
+\begin{equation}
+\epsilon_{\text{round}} = f(n, B, z, E, \delta)
+\end{equation}
+
+where:
+\begin{itemize}
+    \item $n$: Samples per worker (41,738)
+    \item $B$: Batch size (32)
+    \item $z$: Noise multiplier (1.0)
+    \item $E$: Epochs per round (5)
+    \item $\delta$: Delta (1e-5)
+\end{itemize}
+
+\subsection{Total Privacy Budget}
+
+After $R$ rounds:
+
+\begin{equation}
+\epsilon_{\text{total}} = \sum_{r=1}^{R} \epsilon_{\text{round}} = R \times \epsilon_{\text{round}}
+\end{equation}
+
+For our 5-round training:
+\begin{equation}
+\epsilon_{\text{total}} \approx 5 \times 0.7 = 3.5
+\end{equation}
+
+\section{Example: Privacy Budget Calculation}
+
+\subsection{Scenario}
+
+\begin{itemize}
+    \item Worker 1: 41,738 samples
+    \item Batch size: 32
+    \item Epochs per round: 5
+    \item Noise multiplier: 1.0
+    \item Delta: 1e-5
+    \item Total rounds: 5
+\end{itemize}
+
+\subsection{Calculation}
+
+Using the DP-SGD privacy accounting:
+
+\begin{align}
+\epsilon_{\text{round}} &\approx 0.6979 \\
+\epsilon_{\text{total}} &= 5 \times 0.6979 = 3.4895
+\end{align}
+
+\subsection{Interpretation}
+
+After 5 rounds of federated training:
+\begin{itemize}
+    \item Privacy guarantee: $(3.49, 10^{-5})$-DP
+    \item Meaning: Adding/removing one sample changes output by factor $e^{3.49} \approx 32.8$
+    \item Failure probability: 0.001\%
+\end{itemize}
+
+\section{Recommendations}
+
+\subsection{For Stronger Privacy}
+
+\begin{itemize}
+    \item Reduce clip norm: $C = 0.5$
+    \item Increase noise multiplier: $z = 2.0$
+    \item Reduce epochs per round: $E = 3$
+    \item Result: $\epsilon \approx 0.3$ per round, total $\approx 1.5$
+\end{itemize}
+
+\subsection{For Better Accuracy}
+
+\begin{itemize}
+    \item Increase clip norm: $C = 2.0$
+    \item Reduce noise multiplier: $z = 0.5$
+    \item Keep epochs: $E = 5$
+    \item Result: $\epsilon \approx 1.2$ per round, total $\approx 6.0$
+\end{itemize}
+
+\subsection{For Balanced Trade-off}
+
+\begin{itemize}
+    \item Current settings: $C = 1.0$, $z = 1.0$, $E = 5$
+    \item Result: $\epsilon \approx 0.7$ per round, total $\approx 3.5$
+    \item Good balance between privacy and accuracy
+\end{itemize}
+
+\section{Conclusion}
+
+Our DP implementation uses four key parameters to control the privacy-accuracy trade-off:
+
+\begin{itemize}
+    \item \textbf{Clip Norm} ($C = 1.0$): Bounds gradient sensitivity
+    \item \textbf{Noise Multiplier} ($z = 1.0$): Controls noise magnitude
+    \item \textbf{Delta} ($\delta = 10^{-5}$): Failure probability
+    \item \textbf{Epsilon} ($\epsilon \approx 0.7$/round): Privacy budget
+\end{itemize}
+
+These parameters work together to provide $(3.5, 10^{-5})$-differential privacy after 5 rounds of federated training, protecting individual training samples while maintaining reasonable model accuracy.
+
+\end{document}
+

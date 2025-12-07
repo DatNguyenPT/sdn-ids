@@ -29,6 +29,29 @@ from tensorflow.keras.layers import Dense, Dropout, BatchNormalization, Conv1D, 
 from tensorflow.keras.optimizers import Adam
 import logging
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - [%(levelname)s] - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Differential Privacy imports (optional)
+# Note: tensorflow-privacy has compatibility issues with TF 2.16+
+# For now, DP will be disabled if import fails
+try:
+    # Try standard import first
+    from tensorflow_privacy.privacy.optimizers import dp_optimizer_keras
+    from tensorflow_privacy.privacy.analysis.compute_dp_sgd_privacy_lib import compute_dp_sgd_privacy
+    DPKerasAdamOptimizer = dp_optimizer_keras.DPKerasAdamOptimizer
+    DP_AVAILABLE = True
+except ImportError as e:
+    # If import fails, DP is not available
+    DP_AVAILABLE = False
+    DPKerasAdamOptimizer = None
+    compute_dp_sgd_privacy = None
+    logger.warning(f"TensorFlow Privacy not available. DP features will be disabled. Error: {str(e)[:100]}")
+
 # Import preprocessing pipeline
 try:
     from preprocess import process_col, normalization, split_dataset
@@ -54,7 +77,11 @@ class FlowerWorker(fl.client.NumPyClient):
         model_type: str = "MLPv2",
         epochs_per_round: int = 5,
         batch_size: int = 32,
-        total_rounds: int = 5
+        total_rounds: int = 5,
+        enable_dp: bool = False,
+        dp_clip_norm: float = 1.0,
+        dp_noise_multiplier: float = 1.0,
+        dp_delta: float = 1e-5
     ):
         """
         Initialize the Flower worker.
@@ -66,6 +93,10 @@ class FlowerWorker(fl.client.NumPyClient):
             epochs_per_round: Number of epochs to train per federated round
             batch_size: Batch size for training
             total_rounds: Total number of FL rounds expected
+            enable_dp: Enable Differential Privacy (default: False)
+            dp_clip_norm: Gradient clipping norm for DP (default: 1.0)
+            dp_noise_multiplier: Noise multiplier for DP (default: 1.0)
+            dp_delta: Delta parameter for DP (default: 1e-5)
         """
         self.worker_id = worker_id
         self.data_partition = data_partition
@@ -75,6 +106,15 @@ class FlowerWorker(fl.client.NumPyClient):
         self.total_rounds = total_rounds
         self.current_round = 0
         self.training_complete = False
+        
+        # Differential Privacy settings
+        self.enable_dp = enable_dp and DP_AVAILABLE
+        if enable_dp and not DP_AVAILABLE:
+            logger.warning(f"[{worker_id}] DP requested but TensorFlow Privacy not available. DP disabled.")
+        self.dp_clip_norm = dp_clip_norm
+        self.dp_noise_multiplier = dp_noise_multiplier
+        self.dp_delta = dp_delta
+        self.epsilon_spent = 0.0  # Track privacy budget spent
         
         # Load and preprocess data
         logger.info(f"[{worker_id}] Loading dataset...")
@@ -90,6 +130,13 @@ class FlowerWorker(fl.client.NumPyClient):
         logger.info(f"  - Features: {self.num_features}, Classes: {self.num_classes}")
         logger.info(f"  - Model type: {model_type}")
         logger.info(f"  - Total rounds: {total_rounds}")
+        if self.enable_dp:
+            logger.info(f"  - 🔒 Differential Privacy: ENABLED")
+            logger.info(f"    - Clip norm: {dp_clip_norm}")
+            logger.info(f"    - Noise multiplier: {dp_noise_multiplier}")
+            logger.info(f"    - Delta: {dp_delta}")
+        else:
+            logger.info(f"  - Differential Privacy: DISABLED")
     
     def _load_data(self):
         """Load and preprocess the dataset"""
@@ -204,8 +251,34 @@ class FlowerWorker(fl.client.NumPyClient):
                 Dense(self.num_classes, activation='softmax')
             ])
         
+        # Choose optimizer based on DP setting
+        if self.enable_dp:
+            # Adjust DP parameters based on model type
+            # LSTM/CNN_LSTM are more sensitive to noise, use gentler DP
+            if self.model_type in ['LSTM', 'CNN_LSTM']:
+                # Use gentler DP for sequential models
+                effective_clip_norm = self.dp_clip_norm * 1.5  # Allow larger gradients
+                effective_noise_multiplier = self.dp_noise_multiplier * 0.5  # Less noise
+                logger.info(f"[{self.worker_id}] 🔒 Using DP-SGD optimizer (LSTM-optimized: clip_norm={effective_clip_norm}, noise_multiplier={effective_noise_multiplier})")
+            else:
+                # Standard DP for MLP/CNN1D
+                effective_clip_norm = self.dp_clip_norm
+                effective_noise_multiplier = self.dp_noise_multiplier
+                logger.info(f"[{self.worker_id}] 🔒 Using DP-SGD optimizer (clip_norm={effective_clip_norm}, noise_multiplier={effective_noise_multiplier})")
+            
+            # Use DP-SGD optimizer
+            optimizer = DPKerasAdamOptimizer(
+                l2_norm_clip=effective_clip_norm,
+                noise_multiplier=effective_noise_multiplier,
+                num_microbatches=1,  # Process entire batch at once
+                learning_rate=0.001
+            )
+        else:
+            # Standard optimizer
+            optimizer = Adam(learning_rate=0.001)
+        
         model.compile(
-            optimizer=Adam(learning_rate=0.001),
+            optimizer=optimizer,
             loss='categorical_crossentropy',
             metrics=['accuracy']
         )
@@ -285,18 +358,44 @@ class FlowerWorker(fl.client.NumPyClient):
         # Get model parameter count
         model_params_count = self.model.count_params() if self.model else 0
         
-        logger.info(
+        # Track privacy budget if DP is enabled
+        epsilon_this_round = 0.0
+        if self.enable_dp and compute_dp_sgd_privacy is not None:
+            try:
+                # Use effective noise multiplier for privacy accounting
+                # (matches what was used in optimizer)
+                effective_noise_multiplier = (
+                    self.dp_noise_multiplier * 0.5 
+                    if self.model_type in ['LSTM', 'CNN_LSTM'] 
+                    else self.dp_noise_multiplier
+                )
+                
+                epsilon_this_round, _ = compute_dp_sgd_privacy(
+                    n=num_samples,
+                    batch_size=self.batch_size,
+                    noise_multiplier=effective_noise_multiplier,
+                    epochs=self.epochs_per_round,
+                    delta=self.dp_delta
+                )
+                self.epsilon_spent += epsilon_this_round
+            except Exception as e:
+                logger.warning(f"[{self.worker_id}] Failed to compute privacy budget: {e}")
+        
+        log_msg = (
             f"[{self.worker_id}] Training complete (Model: {self.model_type}, Round: {self.current_round}/{self.total_rounds}) - "
             f"Loss: {train_loss:.4f}, Accuracy: {train_accuracy:.4f}, "
             f"Samples: {num_samples}, Epochs: {self.epochs_per_round}, Params: {model_params_count:,}"
         )
+        if self.enable_dp:
+            log_msg += f", ε (this round): {epsilon_this_round:.4f}, ε (total): {self.epsilon_spent:.4f}"
+        logger.info(log_msg)
         
         # Check if this is the last round
         if self.current_round >= self.total_rounds:
             self.training_complete = True
             logger.info(f"[{self.worker_id}] ✅ All {self.total_rounds} rounds completed! Training finished.")
         
-        return updated_weights, num_samples, {
+        metrics_dict = {
             "train_loss": train_loss,
             "train_accuracy": train_accuracy,
             "worker_id": self.worker_id,
@@ -306,6 +405,32 @@ class FlowerWorker(fl.client.NumPyClient):
             "num_features": self.num_features,
             "num_classes": self.num_classes
         }
+        
+        # Add DP metrics if enabled
+        if self.enable_dp:
+            # Calculate effective parameters (for LSTM/CNN_LSTM, these are adjusted)
+            effective_clip_norm = (
+                self.dp_clip_norm * 1.5 
+                if self.model_type in ['LSTM', 'CNN_LSTM'] 
+                else self.dp_clip_norm
+            )
+            effective_noise_multiplier = (
+                self.dp_noise_multiplier * 0.5 
+                if self.model_type in ['LSTM', 'CNN_LSTM'] 
+                else self.dp_noise_multiplier
+            )
+            
+            metrics_dict.update({
+                "dp_enabled": True,
+                "epsilon_this_round": epsilon_this_round,
+                "epsilon_total": self.epsilon_spent,
+                "dp_clip_norm": effective_clip_norm,  # Report effective value
+                "dp_noise_multiplier": effective_noise_multiplier  # Report effective value
+            })
+        else:
+            metrics_dict["dp_enabled"] = False
+        
+        return updated_weights, num_samples, metrics_dict
     
     def evaluate(self, parameters: Weights, config: Dict[str, Any]) -> Tuple[float, int, Dict[str, Any]]:
         """
@@ -389,8 +514,38 @@ def main():
         default=5,
         help='Total number of FL rounds (default: 5)'
     )
+    parser.add_argument(
+        '--enable-dp',
+        action='store_true',
+        default=False,
+        help='Enable Differential Privacy (default: False). Can also be set via FL_ENABLE_DP environment variable.'
+    )
+    parser.add_argument(
+        '--dp-clip-norm',
+        type=float,
+        default=1.0,
+        help='Gradient clipping norm for DP (default: 1.0)'
+    )
+    parser.add_argument(
+        '--dp-noise-multiplier',
+        type=float,
+        default=1.0,
+        help='Noise multiplier for DP (default: 1.0)'
+    )
+    parser.add_argument(
+        '--dp-delta',
+        type=float,
+        default=1e-5,
+        help='Delta parameter for DP (default: 1e-5)'
+    )
     
     args = parser.parse_args()
+    
+    # Check environment variable for DP flag (docker-compose can set FL_ENABLE_DP)
+    enable_dp_env = os.getenv('FL_ENABLE_DP', '').lower()
+    if enable_dp_env in ('true', '1', 'yes'):
+        args.enable_dp = True
+        logger.info("Differential Privacy enabled via FL_ENABLE_DP environment variable")
     
     # Validate data partition
     if not 0.0 < args.data_partition <= 1.0:
@@ -406,6 +561,11 @@ def main():
     print(f" Epochs/Round:    {args.epochs_per_round}")
     print(f" Batch Size:      {args.batch_size}")
     print(f" Total Rounds:    {args.total_rounds}")
+    print(f" Differential Privacy: {'🔒 ENABLED' if args.enable_dp else 'DISABLED'}")
+    if args.enable_dp:
+        print(f"  - Clip Norm:     {args.dp_clip_norm}")
+        print(f"  - Noise Mult:    {args.dp_noise_multiplier}")
+        print(f"  - Delta:         {args.dp_delta}")
     print("="*60)
     print(f"\n🚀 Training Model: {args.model_type}")
     print(" Connecting to Flower server...")
@@ -419,7 +579,11 @@ def main():
             model_type=args.model_type,
             epochs_per_round=args.epochs_per_round,
             batch_size=args.batch_size,
-            total_rounds=args.total_rounds
+            total_rounds=args.total_rounds,
+            enable_dp=args.enable_dp,
+            dp_clip_norm=args.dp_clip_norm,
+            dp_noise_multiplier=args.dp_noise_multiplier,
+            dp_delta=args.dp_delta
         )
         
         # Start Flower client - this will block until training completes

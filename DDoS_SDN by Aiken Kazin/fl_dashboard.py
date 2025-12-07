@@ -46,7 +46,15 @@ metrics = defaultdict(lambda: {
     "params_received_per_round": [],
     "model_params_count": 0,  # Total parameters in the model
     "current_round": 0,
-    "total_rounds": 5
+    "total_rounds": 5,
+    "dp": {
+        "enabled": False,
+        "epsilon_per_round": [],
+        "epsilon_total": 0.0,
+        "dp_clip_norm": 0.0,
+        "dp_noise_multiplier": 0.0,
+        "workers_with_dp": set()
+    }
 })
 
 # Dashboard HTML template with per-model sections
@@ -119,6 +127,35 @@ DASHBOARD_HTML = """
             color: #666;
             font-size: 0.85em;
             margin-top: 5px;
+        }
+        .dp-badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 0.75em;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+        .dp-enabled {
+            background-color: #d1ecf1;
+            color: #0c5460;
+        }
+        .dp-disabled {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .dp-section {
+            background: #f0f8ff;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 15px;
+            border-left: 4px solid #2196f3;
+        }
+        .dp-title {
+            font-weight: bold;
+            color: #1976d2;
+            margin-bottom: 10px;
+            font-size: 1.1em;
         }
         .chart-container {
             margin-top: 15px;
@@ -243,10 +280,21 @@ DASHBOARD_HTML = """
                 const totalParamsSent = (modelData.params_sent_per_round || []).reduce((a, b) => a + b, 0);
                 const totalParamsReceived = (modelData.params_received_per_round || []).reduce((a, b) => a + b, 0);
                 
+                // DP metrics
+                const dpEnabled = modelData.dp && modelData.dp.enabled;
+                const dpEpsilonTotal = modelData.dp ? (modelData.dp.epsilon_total || 0).toFixed(4) : '0.0000';
+                const dpClipNorm = modelData.dp ? (modelData.dp.dp_clip_norm || 0) : 0;
+                const dpNoiseMult = modelData.dp ? (modelData.dp.dp_noise_multiplier || 0) : 0;
+                const dpEpsilonPerRound = modelData.dp ? (modelData.dp.epsilon_per_round || []) : [];
+                
                 modelSectionsHtml += `
                     <div class="model-section">
                         <div class="model-header">
-                            <div class="model-title">${modelType}</div>
+                            <div class="model-title">${modelType}
+                                <span class="dp-badge ${dpEnabled ? 'dp-enabled' : 'dp-disabled'}">
+                                    🔒 DP: ${dpEnabled ? 'ENABLED' : 'DISABLED'}
+                                </span>
+                            </div>
                             <div class="model-status ${statusClass}">${statusText} - Round ${currentRound}/${totalRounds}</div>
                         </div>
                         
@@ -283,7 +331,45 @@ DASHBOARD_HTML = """
                                 <div class="stat-value">${formatNumber(totalParamsReceived)}</div>
                                 <div class="stat-label">Total Params Received</div>
                             </div>
+                            ${dpEnabled ? `
+                            <div class="stat-card">
+                                <div class="stat-value" style="color: #1976d2;">${dpEpsilonTotal}</div>
+                                <div class="stat-label">Total ε (Privacy Budget)</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" style="color: #1976d2;">${dpClipNorm}</div>
+                                <div class="stat-label">DP Clip Norm</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" style="color: #1976d2;">${dpNoiseMult}</div>
+                                <div class="stat-label">DP Noise Mult</div>
+                            </div>
+                            ` : ''}
                         </div>
+                        
+                        ${dpEnabled ? `
+                        <div class="dp-section">
+                            <div class="dp-title">🔒 Differential Privacy Metrics</div>
+                            <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
+                                <div class="stat-card">
+                                    <div class="stat-value" style="color: #1976d2;">${dpEpsilonTotal}</div>
+                                    <div class="stat-label">Total Privacy Budget (ε)</div>
+                                </div>
+                                <div class="stat-card">
+                                    <div class="stat-value" style="color: #1976d2;">${dpClipNorm}</div>
+                                    <div class="stat-label">Gradient Clip Norm</div>
+                                </div>
+                                <div class="stat-card">
+                                    <div class="stat-value" style="color: #1976d2;">${dpNoiseMult}</div>
+                                    <div class="stat-label">Noise Multiplier</div>
+                                </div>
+                            </div>
+                            <div class="chart-container">
+                                <div class="chart-title">Privacy Budget (ε) Per Round</div>
+                                <div id="chart-${modelType}-dp"></div>
+                            </div>
+                        </div>
+                        ` : ''}
                         
                         <div class="chart-container">
                             <div class="chart-title">Accuracy & Loss Over Rounds</div>
@@ -315,6 +401,43 @@ DASHBOARD_HTML = """
                 const bytesReceived = modelData.network.bytes_received_per_round || [];
                 const paramsSent = modelData.params_sent_per_round || [];
                 const paramsReceived = modelData.params_received_per_round || [];
+                const dpEpsilonPerRound = modelData.dp ? (modelData.dp.epsilon_per_round || []) : [];
+                
+                // DP Epsilon chart (if DP is enabled)
+                if (modelData.dp && modelData.dp.enabled && dpEpsilonPerRound.length > 0) {
+                    Plotly.newPlot(`chart-${modelType}-dp`, [
+                        {
+                            x: rounds.slice(0, dpEpsilonPerRound.length),
+                            y: dpEpsilonPerRound,
+                            name: 'Epsilon (ε)',
+                            type: 'scatter',
+                            mode: 'lines+markers',
+                            line: { color: '#1976d2', width: 3 },
+                            marker: { size: 10, color: '#1976d2' },
+                            fill: 'tozeroy',
+                            fillcolor: 'rgba(25, 118, 210, 0.1)'
+                        },
+                        {
+                            x: rounds.slice(0, dpEpsilonPerRound.length),
+                            y: dpEpsilonPerRound.map((_, i, arr) => arr.slice(0, i + 1).reduce((a, b) => a + b, 0)),
+                            name: 'Cumulative ε',
+                            type: 'scatter',
+                            mode: 'lines+markers',
+                            line: { color: '#0d47a1', width: 2, dash: 'dash' },
+                            marker: { size: 8, color: '#0d47a1' }
+                        }
+                    ], {
+                        xaxis: { title: 'Round' },
+                        yaxis: { title: 'Epsilon (ε)', side: 'left' },
+                        hovermode: 'x unified',
+                        margin: { l: 50, r: 50, t: 20, b: 50 },
+                        height: 300,
+                        title: {
+                            text: 'Privacy Budget Consumption',
+                            font: { size: 14, color: '#1976d2' }
+                        }
+                    });
+                }
                 
                 // Accuracy/Loss chart
                 Plotly.newPlot(`chart-${modelType}-accuracy`, [
@@ -447,7 +570,15 @@ def get_metrics():
             "workers": model_metrics["workers"],
             "params_sent_per_round": model_metrics.get("params_sent_per_round", []),
             "params_received_per_round": model_metrics.get("params_received_per_round", []),
-            "model_params_count": model_metrics.get("model_params_count", 0)
+            "model_params_count": model_metrics.get("model_params_count", 0),
+            "dp": {
+                "enabled": model_metrics.get("dp", {}).get("enabled", False),
+                "epsilon_per_round": model_metrics.get("dp", {}).get("epsilon_per_round", []),
+                "epsilon_total": model_metrics.get("dp", {}).get("epsilon_total", 0.0),
+                "dp_clip_norm": model_metrics.get("dp", {}).get("dp_clip_norm", 0.0),
+                "dp_noise_multiplier": model_metrics.get("dp", {}).get("dp_noise_multiplier", 0.0),
+                "workers_with_dp": list(model_metrics.get("dp", {}).get("workers_with_dp", set()))
+            }
         }
     
     response = {
@@ -484,7 +615,15 @@ def update_metrics():
             "params_received_per_round": [],
             "model_params_count": 0,
             "current_round": 0,
-            "total_rounds": 5
+            "total_rounds": 5,
+            "dp": {
+                "enabled": False,
+                "epsilon_per_round": [],
+                "epsilon_total": 0.0,
+                "dp_clip_norm": 0.0,
+                "dp_noise_multiplier": 0.0,
+                "workers_with_dp": set()
+            }
         }
     
     model_metrics = metrics[model_type]
@@ -588,6 +727,34 @@ def update_metrics():
     # Update model parameters count (from worker metrics)
     if "model_params_count" in data:
         model_metrics["model_params_count"] = data["model_params_count"]
+    
+    # Update DP metrics
+    if "dp_enabled" in data:
+        model_metrics["dp"]["enabled"] = bool(data["dp_enabled"])
+    
+    if "epsilon_this_round" in data and data.get("epsilon_this_round", 0) > 0:
+        round_num = data.get("round", len(model_metrics["rounds"]))
+        if round_num in model_metrics["rounds"]:
+            round_idx = model_metrics["rounds"].index(round_num)
+            # Ensure epsilon_per_round list matches rounds
+            while len(model_metrics["dp"]["epsilon_per_round"]) <= round_idx:
+                model_metrics["dp"]["epsilon_per_round"].append(0.0)
+            # Accumulate epsilon for this round (multiple workers may contribute)
+            model_metrics["dp"]["epsilon_per_round"][round_idx] += float(data["epsilon_this_round"])
+            model_metrics["dp"]["epsilon_total"] = sum(model_metrics["dp"]["epsilon_per_round"])
+    
+    if "epsilon_total" in data:
+        model_metrics["dp"]["epsilon_total"] = float(data["epsilon_total"])
+    
+    if "dp_clip_norm" in data:
+        model_metrics["dp"]["dp_clip_norm"] = float(data["dp_clip_norm"])
+    
+    if "dp_noise_multiplier" in data:
+        model_metrics["dp"]["dp_noise_multiplier"] = float(data["dp_noise_multiplier"])
+    
+    # Track which workers have DP enabled
+    if "worker_id" in data and data.get("dp_enabled", False):
+        model_metrics["dp"]["workers_with_dp"].add(data["worker_id"])
     
     return jsonify({"status": "ok", "model_type": model_type})
 
