@@ -1,0 +1,17 @@
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Install MLflow
+RUN pip install --no-cache-dir mlflow
+
+# Create directories with proper permissions
+RUN mkdir -p /app/mlruns && \
+    chmod 777 /app/mlruns
+
+# Expose MLflow port
+EXPOSE 5000
+
+# Start MLflow server (use default file-based backend)
+CMD ["sh", "-c", "exec mlflow server --default-artifact-root /app/mlruns --host 0.0.0.0 --port 5000"]
+

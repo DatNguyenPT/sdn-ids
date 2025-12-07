@@ -13,6 +13,7 @@ import time
 import requests
 import numpy as np
 import os
+import socket
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional
 import flwr as fl
@@ -25,6 +26,15 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# MLflow for experiment tracking
+try:
+    import mlflow
+    import mlflow.keras
+    MLFLOW_AVAILABLE = True
+except ImportError:
+    MLFLOW_AVAILABLE = False
+    logger.warning("MLflow not available - experiment tracking will be disabled")
 
 # Import TensorFlow/Keras for model reconstruction and saving
 try:
@@ -44,7 +54,8 @@ Weights = List[np.ndarray]
 class MetricsFedAvg(FedAvg):
     """FedAvg strategy with metrics tracking"""
     
-    def __init__(self, dashboard_url: Optional[str] = None, num_rounds: int = 5, model_type: str = "Unknown", *args, **kwargs):
+    def __init__(self, dashboard_url: Optional[str] = None, num_rounds: int = 5, model_type: str = "Unknown", 
+                 mlflow_tracking_uri: Optional[str] = None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.dashboard_url = dashboard_url
         self.num_rounds = num_rounds
@@ -65,6 +76,44 @@ class MetricsFedAvg(FedAvg):
         # Model architecture parameters (defaults, will be updated from workers)
         self.num_features = 23  # Default from dataset
         self.num_classes = 2    # Default binary classification
+        
+        # Initialize MLflow if available (non-blocking, will retry later)
+        self.mlflow_run = None
+        self.mlflow_enabled = False
+        self.mlflow_tracking_uri = mlflow_tracking_uri or os.getenv("MLFLOW_TRACKING_URI", "http://mlflow-server:5000")
+        self.mlflow_experiment_name = "DDoS_Detection_FL"
+        
+        if MLFLOW_AVAILABLE:
+            # Set tracking URI but don't verify connection yet (non-blocking)
+            try:
+                mlflow.set_tracking_uri(self.mlflow_tracking_uri)
+                # Try to set up experiment with timeout (non-blocking)
+                # If it fails, we'll retry later when actually logging
+                try:
+                    # Quick connection test with timeout
+                    mlflow_host = self.mlflow_tracking_uri.replace("http://", "").replace("https://", "").split(":")[0]
+                    mlflow_port = int(self.mlflow_tracking_uri.split(":")[-1].split("/")[0])
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(2)  # 2 second timeout
+                    result = sock.connect_ex((mlflow_host, mlflow_port))
+                    sock.close()
+                    
+                    if result == 0:
+                        # MLflow server is reachable, try to set up experiment
+                        experiment = mlflow.get_experiment_by_name(self.mlflow_experiment_name)
+                        if experiment is None:
+                            mlflow.create_experiment(self.mlflow_experiment_name)
+                            logger.info(f"Created MLflow experiment: {self.mlflow_experiment_name}")
+                        else:
+                            mlflow.set_experiment(self.mlflow_experiment_name)
+                            logger.info(f"Using MLflow experiment: {self.mlflow_experiment_name}")
+                        self.mlflow_enabled = True
+                    else:
+                        logger.info(f"MLflow server not ready yet, will retry during training. Tracking URI: {self.mlflow_tracking_uri}")
+                except Exception as e:
+                    logger.info(f"MLflow server not ready yet ({e}), will retry during training. Tracking URI: {self.mlflow_tracking_uri}")
+            except Exception as e:
+                logger.warning(f"Could not initialize MLflow: {e}. MLflow tracking disabled.")
     
     def _send_to_dashboard(self, data: Dict):
         """Send metrics to dashboard"""
@@ -312,6 +361,40 @@ class MetricsFedAvg(FedAvg):
             "workers": set()
         }
         
+        # Start MLflow run on first round (retry initialization if needed)
+        if server_round == 1 and MLFLOW_AVAILABLE:
+            # Try to enable MLflow if not already enabled
+            if not self.mlflow_enabled:
+                try:
+                    mlflow.set_tracking_uri(self.mlflow_tracking_uri)
+                    experiment = mlflow.get_experiment_by_name(self.mlflow_experiment_name)
+                    if experiment is None:
+                        mlflow.create_experiment(self.mlflow_experiment_name)
+                    else:
+                        mlflow.set_experiment(self.mlflow_experiment_name)
+                    self.mlflow_enabled = True
+                    logger.info(f"MLflow enabled on round 1: {self.mlflow_experiment_name}")
+                except Exception as e:
+                    logger.debug(f"MLflow still not available: {e}. Continuing without MLflow tracking.")
+            
+            if self.mlflow_enabled:
+                try:
+                    run_name = f"{self.model_type}_FL_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                    self.mlflow_run = mlflow.start_run(run_name=run_name)
+                    
+                    # Log FL configuration parameters
+                    mlflow.log_params({
+                        "model_type": self.model_type,
+                        "num_rounds": self.num_rounds,
+                        "min_fit_clients": self.min_fit_clients if hasattr(self, 'min_fit_clients') else 0,
+                        "fraction_fit": self.fraction_fit if hasattr(self, 'fraction_fit') else 1.0,
+                        "aggregation": "FedAvg"
+                    })
+                    logger.info(f"Started MLflow run: {run_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to start MLflow run: {e}")
+                    self.mlflow_enabled = False
+        
         # Extract weights from parameters if needed
         # Flower Parameters.tensors is a list of bytes, not numpy arrays
         weights_bytes = []
@@ -499,6 +582,34 @@ class MetricsFedAvg(FedAvg):
             f"Received {total_bytes_received / 1024 / 1024:.2f} MB from {len(results)} clients"
         )
         
+        # Log network metrics to MLflow (accuracy/loss will be logged in aggregate_evaluate)
+        if self.mlflow_enabled and MLFLOW_AVAILABLE and self.mlflow_run:
+            try:
+                mlflow.log_metrics({
+                    "round_time": round_time,
+                    "bytes_sent": self.round_metrics["bytes_sent"],
+                    "bytes_received": total_bytes_received,
+                    "params_sent": self.round_metrics["params_sent"],
+                    "params_received": total_params_received,
+                    "num_workers": len(results)
+                }, step=rnd)
+                
+                # Log DP metrics if available
+                if results and results[0][1].metrics:
+                    worker_metrics = results[0][1].metrics
+                    if worker_metrics.get("dp_enabled"):
+                        mlflow.log_metrics({
+                            "epsilon_total": worker_metrics.get("epsilon_total", 0.0),
+                            "dp_clip_norm": worker_metrics.get("dp_clip_norm", 0.0),
+                            "dp_noise_multiplier": worker_metrics.get("dp_noise_multiplier", 0.0)
+                        }, step=rnd)
+            except Exception as e:
+                logger.warning(f"Failed to log metrics to MLflow: {e}")
+        
+        # Store evaluation metrics for final logging (will be updated in aggregate_evaluate)
+        self.round_metrics["accuracy"] = accuracy
+        self.round_metrics["loss"] = loss
+        
         # Check if training is complete
         if rnd >= self.num_rounds:
             self.training_complete = True
@@ -520,9 +631,13 @@ class MetricsFedAvg(FedAvg):
                 logger.warning(f"Unexpected aggregated_weights type: {type(aggregated_weights)}")
                 self.final_weights = []
             
+            # Use evaluation metrics (from aggregate_evaluate) instead of fit metrics
+            final_accuracy = self.round_metrics.get("accuracy", float(accuracy))
+            final_loss = self.round_metrics.get("loss", float(loss))
+            
             self.final_metrics = {
-                "accuracy": float(accuracy),
-                "loss": float(loss),
+                "accuracy": final_accuracy,
+                "loss": final_loss,
                 "round": rnd,
                 "total_rounds": self.num_rounds,
                 "model_type": self.model_type,
@@ -531,6 +646,37 @@ class MetricsFedAvg(FedAvg):
             logger.info(f"✅ All {self.num_rounds} rounds completed for {self.model_type}! Training finished.")
             # Save the model as H5 file
             self._save_model()
+            
+            # Register model in MLflow and end run
+            if self.mlflow_enabled and MLFLOW_AVAILABLE and self.mlflow_run:
+                try:
+                    model_path = os.path.join(self.models_dir, f"{self.model_type}_FL.h5")
+                    if os.path.exists(model_path):
+                        from tensorflow.keras.models import load_model
+                        model = load_model(model_path)
+                        mlflow.keras.log_model(
+                            model,
+                            "model",
+                            registered_model_name=f"{self.model_type}_FL"
+                        )
+                        logger.info(f"Registered model in MLflow: {self.model_type}_FL")
+                    
+                    # Log final metrics (use evaluation metrics from round_metrics)
+                    final_accuracy = self.final_metrics.get("accuracy", 0.0)
+                    final_loss = self.final_metrics.get("loss", 0.0)
+                    mlflow.log_metrics({
+                        "final_accuracy": float(final_accuracy),
+                        "final_loss": float(final_loss),
+                        "total_rounds": self.num_rounds
+                    })
+                    logger.info(f"Logged final metrics to MLflow: accuracy={final_accuracy:.4f}, loss={final_loss:.4f}")
+                    
+                    mlflow.end_run()
+                    logger.info("MLflow run completed")
+                except Exception as e:
+                    logger.error(f"Failed to register model in MLflow: {e}")
+                    if mlflow.active_run():
+                        mlflow.end_run()
         
         return aggregated_weights, aggregated_metrics
     
@@ -587,12 +733,29 @@ class MetricsFedAvg(FedAvg):
         model_info = f" ({', '.join(set(model_types))})" if model_types else ""
         logger.info(f"Round {rnd} evaluation complete{model_info}: Accuracy={accuracy:.4f}, Loss={aggregated_loss:.4f}")
         
+        # Update round metrics with evaluation results
+        self.round_metrics["accuracy"] = accuracy
+        self.round_metrics["loss"] = aggregated_loss
+        
         self._send_to_dashboard({
             "round": rnd,
             "accuracy": float(accuracy),
             "loss": float(aggregated_loss),
             "model_type": self.model_type
         })
+        
+        # Log evaluation metrics to MLflow (accuracy/loss from evaluation)
+        if self.mlflow_enabled and MLFLOW_AVAILABLE and self.mlflow_run:
+            try:
+                mlflow.log_metrics({
+                    "round_accuracy": float(accuracy),
+                    "round_loss": float(aggregated_loss),
+                    "accuracy": float(accuracy),  # Also log as "accuracy" for consistency
+                    "loss": float(aggregated_loss)  # Also log as "loss" for consistency
+                }, step=rnd)
+                logger.debug(f"Logged evaluation metrics to MLflow for round {rnd}: accuracy={accuracy:.4f}, loss={aggregated_loss:.4f}")
+            except Exception as e:
+                logger.warning(f"Failed to log evaluation metrics to MLflow: {e}")
         
         return aggregated_loss, aggregated_metrics
 
@@ -628,7 +791,9 @@ def main():
     # Set models directory
     strategy.models_dir = args.models_dir
     
-    config = ServerConfig(num_rounds=args.num_rounds)
+    # Set round timeout to 10 minutes (600 seconds) to prevent indefinite waiting
+    # This allows workers enough time to train while preventing hangs
+    config = ServerConfig(num_rounds=args.num_rounds, round_timeout=600.0)
     
     print("\n" + "="*60)
     print(" Flower Federated Learning Server (with Metrics)")

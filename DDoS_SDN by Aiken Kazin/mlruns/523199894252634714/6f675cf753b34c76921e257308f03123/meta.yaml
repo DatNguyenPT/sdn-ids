@@ -1,0 +1,14 @@
+artifact_uri: /app/mlruns/523199894252634714/6f675cf753b34c76921e257308f03123/artifacts
+end_time: 1765093923399
+entry_point_name: ''
+experiment_id: '523199894252634714'
+lifecycle_stage: active
+run_id: 6f675cf753b34c76921e257308f03123
+run_name: CNN_LSTM_FL_20251207_075008
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1765093808429
+status: 3
+tags: []
+user_id: root

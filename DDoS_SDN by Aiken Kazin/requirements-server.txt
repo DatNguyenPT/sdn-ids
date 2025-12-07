@@ -2,4 +2,5 @@
 # Added TensorFlow for model saving as H5 files
 flwr>=1.0.0
 tensorflow>=2.10.0
+mlflow>=2.8.0
 

@@ -15,12 +15,14 @@ services:
       - FL_FRACTION_FIT=1.0
       - FL_FRACTION_EVALUATE=1.0
       - FL_DASHBOARD_URL=http://fl-dashboard:5000
+      - MLFLOW_TRACKING_URI=http://mlflow-server:5000
     command: python flower_server_metrics.py --address 0.0.0.0 --port 8080 --min-clients 2 --num-rounds 5 --fraction-fit 1.0 --fraction-evaluate 1.0 --dashboard-url http://fl-dashboard:5000 --model-type MLPv2 --models-dir /app/models
     restart: "no"
     networks:
       - flower-network
     depends_on:
       - fl-dashboard
+      - mlflow-server
     volumes:
       - ./models:/app/models
 
@@ -40,12 +42,14 @@ services:
       - FL_FRACTION_FIT=1.0
       - FL_FRACTION_EVALUATE=1.0
       - FL_DASHBOARD_URL=http://fl-dashboard:5000
+      - MLFLOW_TRACKING_URI=http://mlflow-server:5000
     command: python flower_server_metrics.py --address 0.0.0.0 --port 8080 --min-clients 2 --num-rounds 5 --fraction-fit 1.0 --fraction-evaluate 1.0 --dashboard-url http://fl-dashboard:5000 --model-type CNN1D --models-dir /app/models
     restart: "no"
     networks:
       - flower-network
     depends_on:
       - fl-dashboard
+      - mlflow-server
     volumes:
       - ./models:/app/models
 
@@ -65,12 +69,14 @@ services:
       - FL_FRACTION_FIT=1.0
       - FL_FRACTION_EVALUATE=1.0
       - FL_DASHBOARD_URL=http://fl-dashboard:5000
+      - MLFLOW_TRACKING_URI=http://mlflow-server:5000
     command: python flower_server_metrics.py --address 0.0.0.0 --port 8080 --min-clients 2 --num-rounds 5 --fraction-fit 1.0 --fraction-evaluate 1.0 --dashboard-url http://fl-dashboard:5000 --model-type LSTM --models-dir /app/models
     restart: "no"
     networks:
       - flower-network
     depends_on:
       - fl-dashboard
+      - mlflow-server
     volumes:
       - ./models:/app/models
 
@@ -90,12 +96,14 @@ services:
       - FL_FRACTION_FIT=1.0
       - FL_FRACTION_EVALUATE=1.0
       - FL_DASHBOARD_URL=http://fl-dashboard:5000
+      - MLFLOW_TRACKING_URI=http://mlflow-server:5000
     command: python flower_server_metrics.py --address 0.0.0.0 --port 8080 --min-clients 2 --num-rounds 5 --fraction-fit 1.0 --fraction-evaluate 1.0 --dashboard-url http://fl-dashboard:5000 --model-type CNN_LSTM --models-dir /app/models
     restart: "no"
     networks:
       - flower-network
     depends_on:
       - fl-dashboard
+      - mlflow-server
     volumes:
       - ./models:/app/models
 
@@ -375,6 +383,21 @@ services:
       - flower-network
     volumes:
       - ./dataset_sdn.csv:/app/dataset_sdn.csv:ro
+
+  # MLflow Tracking Server - Experiment tracking and model registry
+  mlflow-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.mlflow
+    container_name: mlflow-server
+    image: mlflow-server:latest
+    ports:
+      - "5002:5000"
+    volumes:
+      - ./mlruns:/app/mlruns
+    networks:
+      - flower-network
+    restart: unless-stopped
 
 networks:
   flower-network:

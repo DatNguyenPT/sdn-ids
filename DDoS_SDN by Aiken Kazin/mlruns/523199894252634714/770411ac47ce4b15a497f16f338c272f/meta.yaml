@@ -1,0 +1,14 @@
+artifact_uri: /app/mlruns/523199894252634714/770411ac47ce4b15a497f16f338c272f/artifacts
+end_time: null
+entry_point_name: ''
+experiment_id: '523199894252634714'
+lifecycle_stage: active
+run_id: 770411ac47ce4b15a497f16f338c272f
+run_name: LSTM_FL_20251207_081947
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1765095587514
+status: 1
+tags: []
+user_id: root
