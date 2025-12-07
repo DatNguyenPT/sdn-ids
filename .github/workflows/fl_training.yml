@@ -8,11 +8,11 @@ on:
       - master
     paths:
       - '.github/workflows/**'
-      - 'flower_worker.py'
-      - 'flower_server_metrics.py'
-      - 'train.py'
-      - 'mlops/**'
-      - 'dataset_sdn.csv'
+      - 'DDoS_SDN by Aiken Kazin/flower_worker.py'
+      - 'DDoS_SDN by Aiken Kazin/flower_server_metrics.py'
+      - 'DDoS_SDN by Aiken Kazin/train.py'
+      - 'DDoS_SDN by Aiken Kazin/mlops/**'
+      - 'DDoS_SDN by Aiken Kazin/dataset_sdn.csv'
   
   # Scheduled: Weekly retraining every Sunday at 2 AM UTC
   schedule:
@@ -68,15 +68,18 @@ jobs:
           python-version: '3.9'
       
       - name: Install dependencies
+        working-directory: "DDoS_SDN by Aiken Kazin"
         run: |
           python -m pip install --upgrade pip
           pip install pandas numpy scikit-learn
       
       - name: Validate dataset
+        working-directory: "DDoS_SDN by Aiken Kazin"
         run: |
           python mlops/validate_data.py
       
       - name: Check data quality
+        working-directory: "DDoS_SDN by Aiken Kazin"
         run: |
           python mlops/setup_baseline.py || echo "Baseline already exists or failed"
         continue-on-error: true
@@ -95,15 +98,18 @@ jobs:
           python-version: '3.9'
       
       - name: Install linting tools
+        working-directory: "DDoS_SDN by Aiken Kazin"
         run: |
           pip install flake8 black
       
       - name: Check code formatting with Black
+        working-directory: "DDoS_SDN by Aiken Kazin"
         run: |
           black --check --diff .
         continue-on-error: true
       
       - name: Lint with flake8
+        working-directory: "DDoS_SDN by Aiken Kazin"
         run: |
           flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
           flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
@@ -134,7 +140,14 @@ jobs:
           docker --version
           docker compose version
       
+      - name: Change to project directory
+        run: |
+          cd "DDoS_SDN by Aiken Kazin"
+          pwd
+          ls -la | head -10
+      
       - name: Check dataset file
+        working-directory: "DDoS_SDN by Aiken Kazin"
         run: |
           if [ ! -f "dataset_sdn.csv" ]; then
             echo "❌ dataset_sdn.csv not found!"
@@ -151,6 +164,7 @@ jobs:
           python-version: '3.9'
       
       - name: Install dependencies
+        working-directory: "DDoS_SDN by Aiken Kazin"
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-server.txt
@@ -158,6 +172,7 @@ jobs:
           pip install mlflow
       
       - name: Start MLflow server
+        working-directory: "DDoS_SDN by Aiken Kazin"
         run: |
           mlflow server --backend-store-uri sqlite:///mlflow.db \
                         --default-artifact-root ./mlruns \
@@ -166,6 +181,7 @@ jobs:
         continue-on-error: true
       
       - name: Start FL infrastructure for ${{ matrix.model_type }}
+        working-directory: "DDoS_SDN by Aiken Kazin"
         run: |
           # Set environment variables
           export FL_ENABLE_DP=${{ github.event.inputs.enable_dp || 'false' }}
@@ -239,6 +255,7 @@ jobs:
           FL_MODEL_TYPE: ${{ matrix.model_type }}
       
       - name: Monitor FL Training
+        working-directory: "DDoS_SDN by Aiken Kazin"
         run: |
           echo "Monitoring FL training for ${{ matrix.model_type }}..."
           # Wait for training to complete (max 1 hour)
@@ -257,6 +274,7 @@ jobs:
       
       - name: Collect Training Logs
         if: always()
+        working-directory: "DDoS_SDN by Aiken Kazin"
         run: |
           echo "=== FL Server Logs ==="
           docker compose logs flower-server-${{ matrix.model_type }} || true
@@ -266,6 +284,7 @@ jobs:
       
       - name: Check Model Files
         if: always()
+        working-directory: "DDoS_SDN by Aiken Kazin"
         run: |
           if [ -f "models/${{ matrix.model_type }}_FL.h5" ]; then
             echo "✅ Model file created: models/${{ matrix.model_type }}_FL.h5"
@@ -282,13 +301,14 @@ jobs:
         with:
           name: model-${{ matrix.model_type }}
           path: |
-            models/${{ matrix.model_type }}_FL.h5
-            mlruns/
+            DDoS_SDN by Aiken Kazin/models/${{ matrix.model_type }}_FL.h5
+            DDoS_SDN by Aiken Kazin/mlruns/
           retention-days: 7
         continue-on-error: true
       
       - name: Cleanup
         if: always()
+        working-directory: "DDoS_SDN by Aiken Kazin"
         run: |
           docker compose down -v || true
 
@@ -314,11 +334,13 @@ jobs:
           python-version: '3.9'
       
       - name: Install dependencies
+        working-directory: "DDoS_SDN by Aiken Kazin"
         run: |
           pip install -r requirements-worker.txt
           pip install pandas numpy scikit-learn matplotlib seaborn
       
       - name: Evaluate models
+        working-directory: "DDoS_SDN by Aiken Kazin"
         run: |
           for model in models/*_FL.h5; do
             if [ -f "$model" ]; then
