@@ -276,17 +276,17 @@ def trainModel(String modelType) {
         
         // Monitor training
         echo "⏳ Monitoring FL training for ${modelType}..."
-        sh '''
+        sh """
             timeout 3600 bash -c '
                 while true; do
-                    if docker compose logs --tail=10 flower-server-''' + modelTypeLower + ''' | grep -q "Training finished\|All.*rounds completed"; then
+                    if docker compose logs --tail=10 flower-server-${modelTypeLower} | grep -q "Training finished\\|All.*rounds completed"; then
                         echo "✅ Training completed!"
                         break
                     fi
                     sleep 10
                 done
             ' || echo "Training timeout or still running"
-        '''
+        """
         
         // Collect logs
         sh """
