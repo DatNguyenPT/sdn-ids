@@ -1,0 +1,705 @@
+\documentclass[12pt]{article}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{geometry}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{booktabs}
+
+\geometry{margin=1in}
+
+\title{MLOps for Federated Learning: Adapting Operations to Distributed Training}
+\subtitle{How MLOps Principles Apply to Your DDoS Detection FL System}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+
+Federated Learning (FL) introduces unique challenges that require adapted MLOps practices. Unlike centralized ML, FL involves:
+\begin{itemize}
+    \item Distributed training across multiple clients
+    \item Privacy constraints (no access to client data)
+    \item Round-based iterative training
+    \item Model aggregation instead of direct training
+    \item Communication overhead management
+\end{itemize}
+
+\section{Key Differences: Centralized ML vs Federated Learning}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Aspect} & \textbf{Centralized ML} & \textbf{Federated Learning} \\
+\hline
+\textbf{Training} & Single location & Distributed across clients \\
+\hline
+\textbf{Data Access} & Full dataset available & Data stays on clients \\
+\hline
+\textbf{Model Updates} & Direct gradient updates & Weight aggregation (FedAvg) \\
+\hline
+\textbf{Monitoring} & Single training run & Multiple rounds + clients \\
+\hline
+\textbf{Versioning} & Model versions & Round versions + aggregated models \\
+\hline
+\textbf{Deployment} & Single model & Global model + client models \\
+\hline
+\end{tabular}
+\caption{Centralized ML vs Federated Learning}
+\end{table}
+
+\section{MLOps Components Adapted for FL}
+
+\subsection{1. Experiment Tracking (FL-Specific)}
+
+\subsubsection{What to Track in FL:}
+
+\textbf{Per-Round Metrics:}
+\begin{itemize}
+    \item Global model accuracy/loss (aggregated)
+    \item Client participation rate
+    \item Round completion time
+    \item Communication overhead (bytes sent/received)
+    \item Convergence rate across rounds
+\end{itemize}
+
+\textbf{Per-Client Metrics (Privacy-Preserving):}
+\begin{itemize}
+    \item Local training loss/accuracy (aggregated, not individual)
+    \item Number of samples per client
+    \item Training time per client
+    \item Model update contribution (weighted by samples)
+\end{itemize}
+
+\textbf{In Your Code:}
+\begin{lstlisting}[language=Python]
+# flower_server_metrics.py tracks:
+- Round number
+- Aggregated accuracy/loss
+- Bytes sent/received
+- Parameters count
+- Round duration
+- Client participation
+\end{lstlisting}
+
+\subsubsection{MLOps Tools for FL Experiment Tracking:}
+
+\textbf{MLflow Integration:}
+\begin{lstlisting}[language=Python]
+import mlflow
+
+# Track FL experiment
+with mlflow.start_run():
+    mlflow.log_param("num_rounds", 5)
+    mlflow.log_param("num_clients", 2)
+    mlflow.log_param("fraction_fit", 1.0)
+    
+    # Track per-round metrics
+    for round_num in range(1, 6):
+        mlflow.log_metric("round_accuracy", accuracy, step=round_num)
+        mlflow.log_metric("round_loss", loss, step=round_num)
+        mlflow.log_metric("bytes_sent", bytes_sent, step=round_num)
+        mlflow.log_metric("round_time", round_time, step=round_num)
+    
+    # Log final aggregated model
+    mlflow.keras.log_model(aggregated_model, "model")
+\end{lstlisting}
+
+\subsection{2. Model Versioning (Round-Based)}
+
+\subsubsection{FL Model Versioning Strategy:}
+
+\textbf{Current Approach:}
+\begin{itemize}
+    \item Single model saved: `MLPv2_FL.h5`
+    \item No versioning of rounds
+    \item No tracking of intermediate rounds
+\end{itemize}
+
+\textbf{MLOps Approach:}
+\[
+\text{Model Version} = \text{Model\_Type}\_\text{Round}\_\text{Accuracy}\_\text{Timestamp}
+\]
+
+\textbf{Example:}
+\begin{itemize}
+    \item `MLPv2_FL_Round1_Acc0.85_20250115.h5`
+    \item `MLPv2_FL_Round3_Acc0.91_20250115.h5`
+    \item `MLPv2_FL_Round5_Acc0.94_20250115.h5` (final)
+\end{itemize}
+
+\textbf{Implementation:}
+\begin{lstlisting}[language=Python]
+# After each round aggregation
+round_accuracy = aggregated_metrics.get('accuracy', 0)
+model_version = f"{model_type}_FL_Round{round_num}_Acc{round_accuracy:.3f}_{timestamp}"
+model.save(f"models/{model_version}.h5")
+
+# Register in model registry
+mlflow.register_model(
+    f"runs:/{run_id}/model",
+    f"{model_type}_FL_v{round_num}"
+)
+\end{lstlisting}
+
+\subsubsection{Why Round-Based Versioning Matters:}
+
+\begin{itemize}
+    \item \textbf{Rollback capability:} Can revert to previous round if performance degrades
+    \item \textbf{Convergence analysis:} Track how model improves across rounds
+    \item \textbf{Debugging:} Identify which round introduced issues
+    \item \textbf{Research:} Compare different FL strategies (FedAvg vs FedProx vs others)
+\end{itemize}
+
+\subsection{3. Model Registry (FL-Aware)}
+
+\subsubsection{Registry Structure:}
+
+\[
+\text{Registry} = \begin{cases}
+\text{Global Models} & \text{(Aggregated, server-side)} \\
+\text{Client Models} & \text{(Local, client-side, optional)}
+\end{cases}
+\]
+
+\textbf{Global Model Registry:}
+\begin{itemize}
+    \item \textbf{Entry:} Aggregated model after each round
+    \item \textbf{Metadata:} Round number, accuracy, loss, client count, aggregation method
+    \item \textbf{Staging:} Round-by-round progression
+    \item \textbf{Production:} Final model after all rounds
+\end{itemize}
+
+\textbf{Example Registry Entry:}
+\begin{lstlisting}[language=JSON]
+{
+  "model_id": "MLPv2_FL_Round5",
+  "version": "5.0",
+  "round": 5,
+  "accuracy": 0.94,
+  "loss": 0.12,
+  "num_clients": 2,
+  "total_samples": 72235,
+  "aggregation_method": "FedAvg",
+  "timestamp": "2025-01-15T10:30:00",
+  "artifacts": {
+    "model_path": "models/MLPv2_FL_Round5.h5",
+    "metrics_path": "metrics/round5_metrics.json"
+  }
+}
+\end{lstlisting}
+
+\subsection{4. Monitoring (FL-Specific Metrics)}
+
+\subsubsection{What to Monitor in FL:}
+
+\textbf{Training Metrics:}
+\begin{itemize}
+    \item \textbf{Convergence:} How quickly global model converges
+    \item \textbf{Stability:} Variance in client updates
+    \item \textbf{Participation:} Client dropout rate, availability
+    \item \textbf{Communication:} Network overhead, round time
+\end{itemize}
+
+\textbf{Model Quality Metrics:}
+\begin{itemize}
+    \item \textbf{Global accuracy:} Aggregated model performance
+    \item \textbf{Client accuracy variance:} How consistent are client models
+    \item \textbf{Data distribution:} IID vs non-IID detection
+    \item \textbf{Model drift:} Performance degradation over rounds
+\end{itemize}
+
+\textbf{In Your Code:}
+\begin{lstlisting}[language=Python]
+# flower_server_metrics.py already tracks:
+- Round-by-round accuracy/loss
+- Bytes sent/received per round
+- Round duration
+- Client participation
+- Parameter counts
+\end{lstlisting}
+
+\subsubsection{MLOps Monitoring Dashboard:}
+
+\textbf{Key Metrics to Display:}
+\[
+\begin{aligned}
+\text{Convergence Rate} &= \frac{\text{Accuracy}_{\text{round }n} - \text{Accuracy}_{\text{round }1}}{\text{round }n - 1} \\
+\text{Communication Efficiency} &= \frac{\text{Model Improvement}}{\text{Bytes Transferred}} \\
+\text{Client Contribution} &= \frac{n_k \cdot \text{Accuracy}_k}{\sum n_k}
+\end{aligned}
+\]
+
+\subsection{5. CI/CD Pipeline (FL-Aware)}
+
+\subsubsection{FL Pipeline Stages:}
+
+\textbf{Stage 1: Data Validation (Client-Side)}
+\begin{itemize}
+    \item Validate data format on each client
+    \item Check data quality (missing values, outliers)
+    \item Verify data distribution (IID/non-IID)
+    \item \textbf{Privacy:} Validation happens locally, only metadata sent
+\end{itemize}
+
+\textbf{Stage 2: Model Initialization (Server-Side)}
+\begin{itemize}
+    \item Initialize global model architecture
+    \item Set hyperparameters (learning rate, epochs per round)
+    \item Configure FL strategy (FedAvg parameters)
+\end{itemize}
+
+\textbf{Stage 3: FL Training Loop (Distributed)}
+\begin{itemize}
+    \item \textbf{For each round:}
+    \begin{enumerate}
+        \item Server sends global weights to clients
+        \item Clients train locally (parallel)
+        \item Clients send updated weights back
+        \item Server aggregates weights (FedAvg)
+        \item Server evaluates aggregated model
+        \item Log metrics, version model
+    \end{enumerate}
+\end{itemize}
+
+\textbf{Stage 4: Model Validation (Server-Side)}
+\begin{itemize}
+    \item Check convergence (accuracy improvement)
+    \item Validate model performance (threshold check)
+    \item Compare with previous rounds
+    \item Decide: continue training or deploy
+\end{itemize}
+
+\textbf{Stage 5: Deployment (Server-Side)}
+\begin{itemize}
+    \item Deploy aggregated global model
+    \item Update model registry
+    \item Notify clients of new model version
+    \item Monitor production performance
+\end{itemize}
+
+\subsubsection{GitHub Actions Example:}
+
+\begin{lstlisting}[language=YAML]
+name: FL Training Pipeline
+
+on:
+  schedule:
+    - cron: '0 0 * * 0'  # Weekly retraining
+  workflow_dispatch:
+
+jobs:
+  fl-training:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate Data
+        run: python validate_data.py
+        
+      - name: Start FL Server
+        run: |
+          docker-compose up -d flower-server-mlpv2
+          
+      - name: Start FL Clients
+        run: |
+          docker-compose up -d flower-worker-1 flower-worker-2
+          
+      - name: Monitor FL Training
+        run: |
+          python monitor_fl_training.py --wait-for-completion
+          
+      - name: Evaluate Model
+        run: |
+          python evaluate_fl_model.py --model MLPv2_FL.h5
+          
+      - name: Register Model
+        if: success()
+        run: |
+          mlflow models register --model-path models/MLPv2_FL.h5
+          
+      - name: Deploy if Improved
+        if: success()
+        run: |
+          python deploy_if_improved.py
+\end{lstlisting}
+
+\subsection{6. Model Deployment (FL-Specific)}
+
+\subsubsection{Deployment Architecture:}
+
+\[
+\text{FL Deployment} = \begin{cases}
+\text{Global Model} & \text{(Server, aggregated)} \\
+\text{Client Models} & \text{(Optional, local inference)}
+\end{cases}
+\]
+
+\textbf{Option 1: Centralized Deployment (Current)}
+\begin{itemize}
+    \item Deploy aggregated global model on server
+    \item Clients send inference requests to server
+    \item \textbf{Pros:} Single model to maintain, consistent predictions
+    \item \textbf{Cons:} Network latency, server load
+\end{itemize}
+
+\textbf{Option 2: Federated Deployment}
+\begin{itemize}
+    \item Deploy global model to each client
+    \item Clients perform local inference
+    \item \textbf{Pros:} Low latency, privacy-preserving
+    \item \textbf{Cons:} Model synchronization needed
+\end{itemize}
+
+\textbf{Option 3: Hybrid}
+\begin{itemize}
+    \item Global model on server for centralized inference
+    \item Client models for local inference (optional)
+    \item \textbf{Pros:} Flexibility, fallback options
+\end{itemize}
+
+\subsubsection{Deployment Pipeline:}
+
+\begin{lstlisting}[language=Python]
+# After FL training completes
+def deploy_fl_model(model_path, model_version):
+    # 1. Load aggregated model
+    global_model = load_model(model_path)
+    
+    # 2. Validate performance
+    test_accuracy = evaluate_model(global_model)
+    if test_accuracy < threshold:
+        raise ValueError("Model performance below threshold")
+    
+    # 3. Register in model registry
+    mlflow.register_model(model_path, f"MLPv2_FL_{model_version}")
+    
+    # 4. Deploy to production
+    # Option A: Server deployment
+    deploy_to_server(global_model)
+    
+    # Option B: Client deployment (federated)
+    deploy_to_clients(global_model)
+    
+    # 5. Monitor deployment
+    start_monitoring(global_model)
+\end{lstlisting}
+
+\subsection{7. Automated Retraining (FL-Specific)}
+
+\subsubsection{Retraining Triggers:}
+
+\textbf{1. Scheduled Retraining:}
+\begin{itemize}
+    \item Weekly/Monthly FL rounds
+    \item New data accumulates on clients
+    \item Global model needs updates
+\end{itemize}
+
+\textbf{2. Performance Degradation:}
+\begin{itemize}
+    \item Monitor production accuracy
+    \item If accuracy drops below threshold → trigger FL retraining
+    \item New attack patterns detected
+\end{itemize}
+
+\textbf{3. Data Drift Detection:}
+\begin{itemize}
+    \item Detect distribution shift in client data
+    \item New DDoS attack types emerge
+    \item Network behavior changes
+\end{itemize}
+
+\textbf{4. New Clients Join:}
+\begin{itemize}
+    \item New network nodes added
+    \item Retrain to incorporate new client data
+    \item Maintain model freshness
+\end{itemize}
+
+\subsubsection{FL Retraining Pipeline:}
+
+\begin{lstlisting}[language=Python]
+def fl_retraining_pipeline():
+    # 1. Check if retraining needed
+    if not should_retrain():
+        return
+    
+    # 2. Load previous model as initialization
+    previous_model = load_model("models/MLPv2_FL_latest.h5")
+    
+    # 3. Start FL training with warm start
+    fl_server.start_training(
+        initial_weights=previous_model.get_weights(),
+        num_rounds=5
+    )
+    
+    # 4. Monitor training
+    monitor_fl_rounds()
+    
+    # 5. Compare with previous model
+    new_accuracy = evaluate_new_model()
+    old_accuracy = evaluate_old_model()
+    
+    # 6. Deploy if improved
+    if new_accuracy > old_accuracy:
+        deploy_new_model()
+    else:
+        keep_old_model()
+\end{lstlisting}
+
+\section{FL-Specific MLOps Challenges}
+
+\subsection{1. Privacy Constraints}
+
+\textbf{Challenge:} Cannot access client data for monitoring/validation
+
+\textbf{MLOps Solution:}
+\begin{itemize}
+    \item \textbf{Federated metrics:} Aggregate metrics without exposing individual client data
+    \item \textbf{Differential privacy:} Add noise to aggregated metrics
+    \item \textbf{Secure aggregation:} Use cryptographic protocols
+    \item \textbf{Metadata only:} Track only aggregated statistics
+\end{itemize}
+
+\textbf{In Your Code:}
+\begin{lstlisting}[language=Python]
+# Privacy-preserving metrics
+aggregated_accuracy = weighted_average(client_accuracies, client_samples)
+# No individual client data exposed
+\end{lstlisting}
+
+\subsection{2. Communication Overhead}
+
+\textbf{Challenge:} Model weights are large, multiple rounds increase communication
+
+\textbf{MLOps Solution:}
+\begin{itemize}
+    \item \textbf{Compression:} Quantization, pruning, compression
+    \item \textbf{Selective updates:} Only send significant weight changes
+    \item \textbf{Monitoring:} Track bytes sent/received (you already do this!)
+    \item \textbf{Optimization:} Reduce model size, use efficient formats
+\end{itemize}
+
+\textbf{In Your Code:}
+\begin{lstlisting}[language=Python]
+# Already tracking communication
+bytes_sent = self._estimate_bytes(weights_bytes)
+params_sent = self._count_parameters(weights)
+# Could optimize: compression, quantization
+\end{lstlisting}
+
+\subsection{3. Client Heterogeneity}
+
+\textbf{Challenge:} Different clients have different:
+\begin{itemize}
+    \item Data distributions (IID vs non-IID)
+    \item Data sizes
+    \item Computational resources
+    \item Network conditions
+\end{itemize}
+
+\textbf{MLOps Solution:}
+\begin{itemize}
+    \item \textbf{Adaptive strategies:} FedProx, FedNova for heterogeneous clients
+    \item \textbf{Client selection:} Select clients based on resources/data
+    \item \textbf{Monitoring:} Track client participation, performance variance
+    \item \textbf{Fairness:} Ensure all clients benefit from FL
+\end{itemize}
+
+\subsection{4. Round-Based Training}
+
+\textbf{Challenge:} Training happens in rounds, not continuous
+
+\textbf{MLOps Solution:}
+\begin{itemize}
+    \item \textbf{Round tracking:} Version models per round
+    \item \textbf{Convergence monitoring:} Track improvement across rounds
+    \item \textbf{Early stopping:} Stop if no improvement
+    \item \textbf{Checkpointing:} Save models after each round
+\end{itemize}
+
+\section{MLOps Implementation for Your FL System}
+
+\subsection{Current State}
+
+\textbf{What You Have:}
+\begin{itemize}
+    \item ✅ Basic monitoring (Flower dashboard)
+    \item ✅ Model saving (H5 files)
+    \item ✅ Metrics tracking (accuracy, loss, bytes)
+    \item ✅ Docker containerization
+    \item ✅ Round-based training
+\end{itemize}
+
+\textbf{What's Missing:}
+\begin{itemize}
+    \item ❌ Model versioning
+    \item ❌ Experiment tracking (MLflow)
+    \item ❌ Model registry
+    \item ❌ Automated pipelines
+    \item ❌ Production deployment
+    \item ❌ Automated retraining
+\end{itemize}
+
+\subsection{Recommended MLOps Stack for FL}
+
+\subsubsection{Tier 1: Essential (Start Here)}
+
+\textbf{1. MLflow for FL Experiment Tracking}
+\begin{lstlisting}[language=Python]
+# Track FL experiments
+import mlflow
+
+mlflow.set_experiment("DDoS_Detection_FL")
+
+with mlflow.start_run():
+    # Log FL configuration
+    mlflow.log_params({
+        "num_rounds": 5,
+        "num_clients": 2,
+        "model_type": "MLPv2",
+        "aggregation": "FedAvg"
+    })
+    
+    # Track per-round metrics
+    for round_num in range(1, 6):
+        mlflow.log_metrics({
+            "round_accuracy": accuracy[round_num],
+            "round_loss": loss[round_num],
+            "bytes_sent": bytes_sent[round_num],
+            "round_time": round_time[round_num]
+        }, step=round_num)
+    
+    # Log final model
+    mlflow.keras.log_model(final_model, "model")
+\end{lstlisting}
+
+\textbf{2. Model Versioning}
+\begin{lstlisting}[language=Python]
+# Version models by round
+def save_fl_model(model, round_num, accuracy, model_type):
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    version = f"{model_type}_FL_Round{round_num}_Acc{accuracy:.3f}_{timestamp}"
+    model_path = f"models/{version}.h5"
+    model.save(model_path)
+    
+    # Also save as latest
+    latest_path = f"models/{model_type}_FL_latest.h5"
+    model.save(latest_path)
+    
+    return model_path
+\end{lstlisting}
+
+\subsubsection{Tier 2: Production (Next Steps)}
+
+\textbf{3. FL-Aware CI/CD Pipeline}
+\begin{itemize}
+    \item Automated FL training on schedule
+    \item Model validation after each round
+    \item Automated deployment if improved
+    \item Rollback capability
+\end{itemize}
+
+\textbf{4. Production Monitoring}
+\begin{itemize}
+    \item Monitor global model performance
+    \item Track client participation
+    \item Detect data drift
+    \item Alert on performance degradation
+\end{itemize}
+
+\subsubsection{Tier 3: Advanced}
+
+\textbf{5. Federated Model Serving}
+\begin{itemize}
+    \item Deploy models to clients
+    \item Local inference capabilities
+    \item Model synchronization
+\end{itemize}
+
+\textbf{6. Advanced FL Strategies}
+\begin{itemize}
+    \item FedProx (handles heterogeneity)
+    \item Secure aggregation
+    \item Differential privacy integration
+\end{itemize}
+
+\section{FL-Specific MLOps Metrics}
+
+\subsection{Key Performance Indicators (KPIs)}
+
+\textbf{Training Metrics:}
+\[
+\begin{aligned}
+\text{Convergence Rate} &= \frac{\Delta \text{Accuracy}}{\text{Rounds}} \\
+\text{Communication Efficiency} &= \frac{\text{Accuracy Gain}}{\text{Total Bytes}} \\
+\text{Client Participation Rate} &= \frac{\text{Active Clients}}{\text{Total Clients}} \\
+\text{Round Efficiency} &= \frac{\text{Accuracy Improvement}}{\text{Round Time}}
+\end{aligned}
+\]
+
+\textbf{Model Quality Metrics:}
+\[
+\begin{aligned}
+\text{Global Accuracy} &= \text{Aggregated test accuracy} \\
+\text{Client Variance} &= \text{Var}(\text{Client Accuracies}) \\
+\text{Model Stability} &= 1 - \frac{\text{Var}(\text{Round Accuracies})}{\text{Mean}(\text{Round Accuracies})}
+\end{aligned}
+\]
+
+\textbf{System Metrics:}
+\[
+\begin{aligned}
+\text{Communication Overhead} &= \frac{\text{Total Bytes}}{\text{Model Parameters}} \\
+\text{Training Time} &= \sum \text{Round Times} \\
+\text{Client Dropout Rate} &= \frac{\text{Clients Dropped}}{\text{Total Clients}}
+\end{aligned}
+\]
+
+\section{Implementation Roadmap}
+
+\subsection{Phase 1: Foundation (Weeks 1-2)}
+
+\begin{enumerate}
+    \item \textbf{Add MLflow:} Integrate experiment tracking
+    \item \textbf{Model versioning:} Implement round-based versioning
+    \item \textbf{Enhanced logging:} Structured logging for FL rounds
+\end{enumerate}
+
+\subsection{Phase 2: Automation (Weeks 3-4)}
+
+\begin{enumerate}
+    \item \textbf{CI/CD pipeline:} Automated FL training
+    \item \textbf{Model registry:} Centralized model management
+    \item \textbf{Automated evaluation:} Post-training validation
+\end{enumerate}
+
+\subsection{Phase 3: Production (Weeks 5-6)}
+
+\begin{enumerate}
+    \item \textbf{Model deployment:} API endpoints for inference
+    \item \textbf{Production monitoring:} Real-time performance tracking
+    \item \textbf{Automated retraining:} Trigger-based FL rounds
+\end{enumerate}
+
+\section{Conclusion}
+
+MLOps is \textbf{highly applicable} to Federated Learning, but requires adaptations:
+
+\begin{itemize}
+    \item \textbf{Experiment tracking} → Track FL rounds, not just final model
+    \item \textbf{Model versioning} → Version by round, track convergence
+    \item \textbf{Monitoring} → FL-specific metrics (convergence, communication)
+    \item \textbf{Deployment} → Consider federated vs centralized deployment
+    \item \textbf{Privacy} → Privacy-preserving monitoring and metrics
+\end{itemize}
+
+\textbf{Key Insight:} MLOps for FL focuses on the \textbf{aggregation process} and \textbf{round-based training}, not just the final model. The entire FL lifecycle needs operationalization.
+
+\end{document}
+

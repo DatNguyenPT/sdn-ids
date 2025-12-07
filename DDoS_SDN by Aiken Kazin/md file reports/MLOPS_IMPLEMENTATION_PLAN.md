@@ -1,0 +1,1498 @@
+# MLOps Implementation Plan for Federated Learning DDoS Detection
+
+**Step-by-Step Guide to Operationalize Your FL System**
+
+## Overview
+
+This document provides a comprehensive, step-by-step plan to implement MLOps for your Federated Learning DDoS detection system. The plan is divided into phases with specific tasks, code examples, and success criteria.
+
+## Current State Assessment
+
+### What You Have
+
+- ✅ Federated Learning infrastructure (Flower)
+- ✅ Basic monitoring dashboard
+- ✅ Model training and evaluation scripts
+- ✅ Docker containerization
+- ✅ Multiple model architectures (MLP, LSTM, CNN1D, CNN_LSTM)
+
+### What's Missing
+
+- ❌ Experiment tracking system
+- ❌ Model versioning and registry
+- ❌ Automated CI/CD pipelines
+- ❌ Production deployment
+- ❌ Automated retraining
+- ❌ Data versioning
+- ❌ Model monitoring in production
+
+## Implementation Phases
+
+### Phase 1: Foundation - Experiment Tracking & Versioning (Week 1-2)
+
+#### Step 1.1: Install MLOps Tools
+
+**Tasks:**
+
+1. Install MLflow for experiment tracking
+2. Install DVC for data versioning (optional)
+3. Set up MLflow tracking server
+
+**Commands:**
+
+```bash
+# Install MLflow
+pip install mlflow
+
+# Install DVC (optional, for data versioning)
+pip install dvc dvc-s3  # or dvc-gdrive
+
+# Start MLflow tracking server
+mlflow server --backend-store-uri sqlite:///mlflow.db \
+              --default-artifact-root ./mlruns \
+              --host 0.0.0.0 --port 5000
+```
+
+**Update requirements.txt:**
+
+```text
+mlflow>=2.8.0
+dvc>=3.0.0  # Optional
+```
+
+#### Step 1.2: Integrate MLflow into FL Server
+
+**File:** `flower_server_metrics.py`
+
+**Changes:**
+
+```python
+import mlflow
+import mlflow.keras
+
+class MetricsFedAvg(FedAvg):
+    def __init__(self, ...):
+        super().__init__(...)
+        # Initialize MLflow
+        mlflow.set_tracking_uri("http://localhost:5000")
+        mlflow.set_experiment("DDoS_Detection_FL")
+        self.mlflow_run = None
+    
+    def configure_fit(self, server_round, parameters, client_manager):
+        # Start MLflow run for this FL training session
+        if server_round == 1:
+            self.mlflow_run = mlflow.start_run(
+                run_name=f"{self.model_type}_FL_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            )
+            # Log FL configuration
+            mlflow.log_params({
+                "model_type": self.model_type,
+                "num_rounds": self.num_rounds,
+                "min_clients": self.min_fit_clients,
+                "fraction_fit": self.fraction_fit,
+                "aggregation": "FedAvg"
+            })
+        
+        # Log round start
+        mlflow.log_metric("round", server_round, step=server_round)
+        
+        return super().configure_fit(server_round, parameters, client_manager)
+    
+    def aggregate_fit(self, rnd, results, failures):
+        aggregated_weights, aggregated_metrics = super().aggregate_fit(rnd, results, failures)
+        
+        # Log round metrics
+        accuracy = aggregated_metrics.get("accuracy", 0.0)
+        loss = aggregated_metrics.get("loss", 0.0)
+        
+        mlflow.log_metrics({
+            "round_accuracy": float(accuracy),
+            "round_loss": float(loss),
+            "bytes_sent": self.round_metrics["bytes_sent"],
+            "bytes_received": self.round_metrics["bytes_received"],
+            "round_time": round_time
+        }, step=rnd)
+        
+        # Save model checkpoint for this round
+        if self.mlflow_run:
+            model = self._create_model_architecture()
+            # Set aggregated weights
+            # ... (weight assignment code) ...
+            mlflow.keras.log_model(
+                model, 
+                f"model_round_{rnd}",
+                registered_model_name=f"{self.model_type}_FL"
+            )
+        
+        # End run after final round
+        if rnd >= self.num_rounds and self.mlflow_run:
+            mlflow.end_run()
+        
+        return aggregated_weights, aggregated_metrics
+```
+
+**Success Criteria:**
+
+- MLflow server running and accessible
+- Each FL training session creates MLflow run
+- Round metrics logged to MLflow
+- Models saved as MLflow artifacts
+
+#### Step 1.3: Implement Model Versioning
+
+**File:** Create `mlops/model_registry.py`
+
+**Code:**
+
+```python
+import os
+import mlflow
+from datetime import datetime
+from tensorflow.keras.models import load_model
+
+class FLModelRegistry:
+    def __init__(self, tracking_uri="http://localhost:5000"):
+        mlflow.set_tracking_uri(tracking_uri)
+        self.client = mlflow.tracking.MlflowClient()
+    
+    def register_model_version(self, model_path, model_type, round_num, 
+                               accuracy, loss, metadata=None):
+        """Register a new model version after FL round"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        version_name = f"{model_type}_FL_Round{round_num}_Acc{accuracy:.3f}_{timestamp}"
+        
+        # Register in MLflow
+        model_name = f"{model_type}_FL"
+        
+        # Log model
+        run = mlflow.start_run(run_name=version_name)
+        mlflow.log_params({
+            "model_type": model_type,
+            "round": round_num,
+            "version": version_name
+        })
+        mlflow.log_metrics({
+            "accuracy": accuracy,
+            "loss": loss
+        })
+        mlflow.keras.log_model(
+            load_model(model_path),
+            "model",
+            registered_model_name=model_name
+        )
+        mlflow.end_run()
+        
+        return version_name
+    
+    def get_latest_model(self, model_type):
+        """Get latest registered model version"""
+        model_name = f"{model_type}_FL"
+        latest_version = self.client.get_latest_versions(
+            model_name, stages=["None"]
+        )
+        if latest_version:
+            return latest_version[0]
+        return None
+    
+    def promote_to_production(self, model_type, version):
+        """Promote model version to production"""
+        model_name = f"{model_type}_FL"
+        self.client.transition_model_version_stage(
+            name=model_name,
+            version=version,
+            stage="Production"
+        )
+```
+
+**Integration:**
+
+```python
+# In flower_server_metrics.py, after aggregation:
+from mlops.model_registry import FLModelRegistry
+
+registry = FLModelRegistry()
+version_name = registry.register_model_version(
+    model_path=model_path,
+    model_type=self.model_type,
+    round_num=rnd,
+    accuracy=accuracy,
+    loss=loss
+)
+```
+
+#### Step 1.4: Enhanced Logging
+
+**File:** Create `mlops/fl_logger.py`
+
+**Code:**
+
+```python
+import logging
+import json
+from datetime import datetime
+from pathlib import Path
+
+class FLLogger:
+    def __init__(self, log_dir="logs/fl_mlops"):
+        Path(log_dir).mkdir(parents=True, exist_ok=True)
+        self.log_dir = log_dir
+        
+        # Structured logging
+        self.logger = logging.getLogger("FL_MLOps")
+        self.logger.setLevel(logging.INFO)
+        
+        # File handler
+        log_file = Path(log_dir) / f"fl_{datetime.now().strftime('%Y%m%d')}.log"
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setFormatter(
+            logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        )
+        self.logger.addHandler(file_handler)
+    
+    def log_round(self, round_num, metrics):
+        """Log structured round metrics"""
+        log_entry = {
+            "timestamp": datetime.now().isoformat(),
+            "round": round_num,
+            "metrics": metrics
+        }
+        
+        # Write to JSON log
+        json_log = Path(self.log_dir) / f"round_{round_num}.json"
+        with open(json_log, 'w') as f:
+            json.dump(log_entry, f, indent=2)
+        
+        # Also log to standard logger
+        self.logger.info(f"Round {round_num}: {json.dumps(metrics)}")
+    
+    def log_model_version(self, model_type, version, metrics):
+        """Log model version information"""
+        log_entry = {
+            "timestamp": datetime.now().isoformat(),
+            "model_type": model_type,
+            "version": version,
+            "metrics": metrics
+        }
+        
+        json_log = Path(self.log_dir) / f"model_{model_type}_{version}.json"
+        with open(json_log, 'w') as f:
+            json.dump(log_entry, f, indent=2)
+```
+
+### Phase 2: Data Management & Validation (Week 2-3)
+
+#### Step 2.1: Data Versioning with DVC
+
+**Setup:**
+
+```bash
+# Initialize DVC
+dvc init
+
+# Add dataset to DVC
+dvc add dataset_sdn.csv
+
+# Commit to git
+git add dataset_sdn.csv.dvc .gitignore
+git commit -m "Add dataset to DVC"
+```
+
+**Create `.dvc/config`:**
+
+```ini
+['remote "local"']
+url = ./dvc_storage
+['remote "s3"']
+url = s3://your-bucket/datasets
+```
+
+#### Step 2.2: Data Validation Pipeline
+
+**File:** Create `mlops/data_validation.py`
+
+**Code:**
+
+```python
+import pandas as pd
+import numpy as np
+from typing import Dict, Tuple
+import great_expectations as ge  # pip install great-expectations
+
+class DataValidator:
+    def __init__(self):
+        self.expectations = []
+    
+    def validate_dataset(self, df: pd.DataFrame) -> Tuple[bool, Dict]:
+        """Validate dataset before FL training"""
+        ge_df = ge.from_pandas(df)
+        
+        # Define expectations
+        expectations = {
+            "row_count": len(df) > 0,
+            "no_null_labels": df['label'].notna().all(),
+            "label_binary": df['label'].isin([0, 1]).all(),
+            "features_range": self._check_feature_ranges(df),
+            "class_balance": self._check_class_balance(df)
+        }
+        
+        results = {}
+        all_passed = True
+        
+        for name, expectation in expectations.items():
+            if isinstance(expectation, bool):
+                results[name] = expectation
+                if not expectation:
+                    all_passed = False
+            else:
+                results[name] = expectation
+        
+        return all_passed, results
+    
+    def _check_feature_ranges(self, df):
+        """Check if features are within expected ranges"""
+        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        numeric_cols = [c for c in numeric_cols if c != 'label']
+        
+        issues = []
+        for col in numeric_cols:
+            if df[col].min() < 0 and col not in ['port_no']:  # Some cols can be negative
+                if 'count' in col.lower() or 'byte' in col.lower():
+                    issues.append(f"{col} has negative values")
+        
+        return len(issues) == 0, issues
+    
+    def _check_class_balance(self, df):
+        """Check class distribution"""
+        class_counts = df['label'].value_counts()
+        balance_ratio = class_counts.min() / class_counts.max()
+        
+        # Warn if severely imbalanced (< 0.3)
+        is_balanced = balance_ratio >= 0.3
+        return is_balanced, {
+            "ratio": balance_ratio,
+            "class_0": int(class_counts[0]),
+            "class_1": int(class_counts[1])
+        }
+```
+
+**Integration:**
+
+```python
+# In flower_worker.py, _load_data method:
+from mlops.data_validation import DataValidator
+
+def _load_data(self):
+    df = pd.read_csv("dataset_sdn.csv")
+    # ... preprocessing ...
+    
+    # Validate data
+    validator = DataValidator()
+    is_valid, validation_results = validator.validate_dataset(df)
+    
+    if not is_valid:
+        logger.warning(f"Data validation issues: {validation_results}")
+        # Could raise exception or log warning
+    
+    # Continue with data loading...
+```
+
+#### Step 2.3: Data Quality Monitoring
+
+**File:** Create `mlops/data_quality.py`
+
+**Code:**
+
+```python
+import pandas as pd
+import numpy as np
+from datetime import datetime
+
+class DataQualityMonitor:
+    def __init__(self):
+        self.baseline_stats = None
+    
+    def compute_baseline(self, df: pd.DataFrame):
+        """Compute baseline statistics for data quality checks"""
+        self.baseline_stats = {
+            "mean": df.select_dtypes(include=[np.number]).mean().to_dict(),
+            "std": df.select_dtypes(include=[np.number]).std().to_dict(),
+            "min": df.select_dtypes(include=[np.number]).min().to_dict(),
+            "max": df.select_dtypes(include=[np.number]).max().to_dict(),
+            "null_counts": df.isnull().sum().to_dict(),
+            "class_distribution": df['label'].value_counts().to_dict()
+        }
+    
+    def detect_drift(self, new_df: pd.DataFrame, threshold=0.1) -> Dict:
+        """Detect data drift compared to baseline"""
+        if self.baseline_stats is None:
+            raise ValueError("Baseline not computed")
+        
+        drift_detected = {}
+        
+        # Check feature distributions
+        for col in new_df.select_dtypes(include=[np.number]).columns:
+            if col in self.baseline_stats['mean']:
+                baseline_mean = self.baseline_stats['mean'][col]
+                new_mean = new_df[col].mean()
+                
+                drift_ratio = abs(new_mean - baseline_mean) / (baseline_mean + 1e-6)
+                if drift_ratio > threshold:
+                    drift_detected[col] = {
+                        "baseline_mean": baseline_mean,
+                        "new_mean": new_mean,
+                        "drift_ratio": drift_ratio
+                    }
+        
+        # Check class distribution
+        new_class_dist = new_df['label'].value_counts().to_dict()
+        baseline_dist = self.baseline_stats['class_distribution']
+        
+        for label in [0, 1]:
+            baseline_ratio = baseline_dist.get(label, 0) / sum(baseline_dist.values())
+            new_ratio = new_class_dist.get(label, 0) / sum(new_class_dist.values())
+            
+            if abs(new_ratio - baseline_ratio) > threshold:
+                drift_detected[f"class_{label}"] = {
+                    "baseline_ratio": baseline_ratio,
+                    "new_ratio": new_ratio
+                }
+        
+        return drift_detected
+```
+
+### Phase 3: CI/CD Pipeline (Week 3-4)
+
+#### Step 3.1: GitHub Actions Workflow
+
+**File:** Create `.github/workflows/fl_training.yml`
+
+**Code:**
+
+```yaml
+name: Federated Learning Training Pipeline
+
+on:
+  schedule:
+    # Weekly retraining every Sunday at 2 AM
+    - cron: '0 2 * * 0'
+  workflow_dispatch:
+    inputs:
+      model_type:
+        description: 'Model type to train'
+        required: true
+        default: 'MLPv2'
+        type: choice
+        options:
+          - MLPv2
+          - LSTM
+          - CNN1D
+          - CNN_LSTM
+      num_rounds:
+        description: 'Number of FL rounds'
+        required: false
+        default: 5
+        type: number
+
+jobs:
+  validate-data:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install great-expectations
+      
+      - name: Validate dataset
+        run: |
+          python mlops/validate_data.py
+      
+      - name: Check data quality
+        run: |
+          python mlops/check_data_quality.py
+
+  fl-training:
+    needs: validate-data
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        model_type: [MLPv2, LSTM, CNN1D, CNN_LSTM]
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install mlflow
+      
+      - name: Start MLflow server
+        run: |
+          mlflow server --backend-store-uri sqlite:///mlflow.db \
+                        --default-artifact-root ./mlruns \
+                        --host 0.0.0.0 --port 5000 &
+        continue-on-error: true
+      
+      - name: Start FL Server
+        run: |
+          docker-compose up -d flower-server-${{ matrix.model_type.lower() }}
+        env:
+          FL_MODEL_TYPE: ${{ matrix.model_type }}
+      
+      - name: Start FL Workers
+        run: |
+          docker-compose up -d flower-worker-1 flower-worker-2
+      
+      - name: Wait for FL Training
+        run: |
+          python mlops/wait_for_fl_completion.py \
+            --model-type ${{ matrix.model_type }} \
+            --max-wait 3600
+      
+      - name: Evaluate Model
+        run: |
+          python evaluate.py --model-name ${{ matrix.model_type }}_FL.h5
+      
+      - name: Register Model in MLflow
+        run: |
+          python mlops/register_model.py \
+            --model-path models/${{ matrix.model_type }}_FL.h5 \
+            --model-type ${{ matrix.model_type }}
+      
+      - name: Compare with Previous Model
+        run: |
+          python mlops/compare_models.py \
+            --new-model ${{ matrix.model_type }}_FL.h5 \
+            --model-type ${{ matrix.model_type }}
+      
+      - name: Deploy if Improved
+        if: success()
+        run: |
+          python mlops/deploy_if_improved.py \
+            --model-type ${{ matrix.model_type }}
+
+  notify:
+    needs: [fl-training]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Notify Results
+        run: |
+          echo "FL Training completed for all models"
+          # Add Slack/Email notification here
+```
+
+#### Step 3.2: Pre-commit Hooks
+
+**File:** Create `.pre-commit-config.yaml`
+
+**Code:**
+
+```yaml
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+      - id: check-json
+  
+  - repo: https://github.com/psf/black
+    rev: 23.3.0
+    hooks:
+      - id: black
+        language_version: python3.9
+  
+  - repo: https://github.com/pycqa/flake8
+    rev: 6.0.0
+    hooks:
+      - id: flake8
+        args: [--max-line-length=100]
+```
+
+**Setup:**
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+#### Step 3.3: Automated Testing
+
+**File:** Create `tests/test_fl_pipeline.py`
+
+**Code:**
+
+```python
+import pytest
+import numpy as np
+from flower_worker import FlowerWorker
+from mlops.data_validation import DataValidator
+
+class TestFLPipeline:
+    def test_data_validation(self):
+        """Test data validation before FL training"""
+        validator = DataValidator()
+        # Create test dataframe
+        df = pd.DataFrame({
+            'feature1': [1, 2, 3],
+            'feature2': [4, 5, 6],
+            'label': [0, 1, 0]
+        })
+        
+        is_valid, results = validator.validate_dataset(df)
+        assert is_valid == True
+    
+    def test_model_creation(self):
+        """Test model creation for each type"""
+        model_types = ['MLPv2', 'CNN1D', 'LSTM', 'CNN_LSTM']
+        
+        for model_type in model_types:
+            worker = FlowerWorker(
+                worker_id="test_worker",
+                model_type=model_type,
+                data_partition=0.1
+            )
+            model = worker._create_model()
+            assert model is not None
+            assert model.count_params() > 0
+    
+    def test_weight_aggregation(self):
+        """Test FedAvg weight aggregation"""
+        # Simulate weights from 2 clients
+        weights_client1 = [np.array([1.0, 2.0]), np.array([3.0])]
+        weights_client2 = [np.array([2.0, 3.0]), np.array([4.0])]
+        
+        # Simulate FedAvg: average weights
+        aggregated = [
+            (w1 + w2) / 2 
+            for w1, w2 in zip(weights_client1, weights_client2)
+        ]
+        
+        assert len(aggregated) == 2
+        assert np.allclose(aggregated[0], [1.5, 2.5])
+```
+
+**Run tests:**
+
+```bash
+pip install pytest pytest-cov
+pytest tests/ -v --cov=.
+```
+
+### Phase 4: Model Deployment (Week 4-5)
+
+#### Step 4.1: Create Model Serving API
+
+**File:** Create `mlops/model_serving.py`
+
+**Code:**
+
+```python
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import numpy as np
+import pandas as pd
+from tensorflow.keras.models import load_model
+from mlops.model_registry import FLModelRegistry
+import mlflow
+
+app = FastAPI(title="DDoS Detection API")
+
+# Load model registry
+registry = FLModelRegistry()
+
+# Cache for loaded models
+model_cache = {}
+
+class PredictionRequest(BaseModel):
+    features: list
+    model_type: str = "MLPv2"
+
+class PredictionResponse(BaseModel):
+    prediction: int
+    probability: float
+    model_version: str
+
+@app.on_event("startup")
+async def load_models():
+    """Load all models on startup"""
+    model_types = ['MLPv2', 'LSTM', 'CNN1D', 'CNN_LSTM']
+    
+    for model_type in model_types:
+        try:
+            # Get latest production model
+            latest = registry.get_latest_model(model_type)
+            if latest:
+                model_path = mlflow.artifacts.download_artifacts(
+                    run_id=latest.run_id,
+                    artifact_path="model"
+                )
+                model_cache[model_type] = load_model(model_path)
+        except Exception as e:
+            print(f"Warning: Could not load {model_type}: {e}")
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "models_loaded": list(model_cache.keys())
+    }
+
+@app.post("/predict", response_model=PredictionResponse)
+async def predict(request: PredictionRequest):
+    """Predict DDoS attack"""
+    if request.model_type not in model_cache:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Model {request.model_type} not available"
+        )
+    
+    model = model_cache[request.model_type]
+    
+    # Prepare input
+    features = np.array([request.features])
+    
+    # Reshape for CNN/LSTM models
+    if request.model_type in ['CNN1D', 'LSTM', 'CNN_LSTM']:
+        features = np.expand_dims(features, axis=2)
+    
+    # Predict
+    prediction_proba = model.predict(features, verbose=0)[0]
+    prediction = int(np.argmax(prediction_proba))
+    probability = float(prediction_proba[prediction])
+    
+    # Get model version
+    latest = registry.get_latest_model(request.model_type)
+    model_version = latest.version if latest else "unknown"
+    
+    return PredictionResponse(
+        prediction=prediction,
+        probability=probability,
+        model_version=model_version
+    )
+
+@app.get("/models")
+async def list_models():
+    """List available models"""
+    return {
+        "available_models": list(model_cache.keys()),
+        "model_info": {
+            model_type: {
+                "parameters": model.count_params(),
+                "input_shape": str(model.input_shape),
+                "output_shape": str(model.output_shape)
+            }
+            for model_type, model in model_cache.items()
+        }
+    }
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+```
+
+#### Step 4.2: Dockerize Model Serving
+
+**File:** Create `Dockerfile.serving`
+
+**Code:**
+
+```dockerfile
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Install dependencies
+COPY requirements-serving.txt .
+RUN pip install --no-cache-dir -r requirements-serving.txt
+
+# Copy application
+COPY mlops/model_serving.py .
+COPY mlops/model_registry.py ./mlops/
+
+# Expose port
+EXPOSE 8000
+
+# Run API server
+CMD ["python", "-m", "uvicorn", "mlops.model_serving:app", \
+     "--host", "0.0.0.0", "--port", "8000"]
+```
+
+**File:** Create `requirements-serving.txt`
+
+**Code:**
+
+```text
+fastapi>=0.104.0
+uvicorn>=0.24.0
+tensorflow>=2.13.0
+mlflow>=2.8.0
+pydantic>=2.0.0
+numpy>=1.24.0
+pandas>=2.0.0
+```
+
+#### Step 4.3: Add to docker-compose.yml
+
+**Add to docker-compose.yml:**
+
+```yaml
+  # Model Serving API
+  model-serving:
+    build:
+      context: .
+      dockerfile: Dockerfile.serving
+    container_name: model-serving-api
+    ports:
+      - "8000:8000"
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow-server:5000
+    volumes:
+      - ./models:/app/models
+      - ./mlruns:/app/mlruns
+    networks:
+      - flower-network
+    depends_on:
+      - mlflow-server
+
+  # MLflow Tracking Server
+  mlflow-server:
+    image: python:3.9-slim
+    container_name: mlflow-server
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mlruns:/mlruns
+      - ./mlflow.db:/mlflow.db
+    command: >
+      bash -c "pip install mlflow &&
+               mlflow server --backend-store-uri sqlite:///mlflow.db
+                            --default-artifact-root ./mlruns
+                            --host 0.0.0.0 --port 5000"
+    networks:
+      - flower-network
+```
+
+### Phase 5: Monitoring & Alerting (Week 5-6)
+
+#### Step 5.1: Production Monitoring
+
+**File:** Create `mlops/production_monitor.py`
+
+**Code:**
+
+```python
+import time
+import requests
+import numpy as np
+from datetime import datetime
+from typing import Dict, List
+import mlflow
+
+class ProductionMonitor:
+    def __init__(self, api_url="http://localhost:8000"):
+        self.api_url = api_url
+        self.predictions_history = []
+        self.performance_metrics = {
+            "total_predictions": 0,
+            "ddos_detected": 0,
+            "avg_latency": 0.0,
+            "error_rate": 0.0
+        }
+    
+    def log_prediction(self, features: List, prediction: int, 
+                      probability: float, latency: float):
+        """Log prediction for monitoring"""
+        self.predictions_history.append({
+            "timestamp": datetime.now().isoformat(),
+            "features": features,
+            "prediction": prediction,
+            "probability": probability,
+            "latency": latency
+        })
+        
+        # Update metrics
+        self.performance_metrics["total_predictions"] += 1
+        if prediction == 1:
+            self.performance_metrics["ddos_detected"] += 1
+        
+        # Update average latency
+        total = self.performance_metrics["total_predictions"]
+        current_avg = self.performance_metrics["avg_latency"]
+        self.performance_metrics["avg_latency"] = (
+            (current_avg * (total - 1) + latency) / total
+        )
+        
+        # Log to MLflow
+        mlflow.log_metrics({
+            "predictions_per_minute": total / (time.time() - self.start_time) * 60,
+            "ddos_detection_rate": self.performance_metrics["ddos_detected"] / total,
+            "avg_latency_ms": self.performance_metrics["avg_latency"] * 1000
+        })
+    
+    def check_performance_degradation(self, threshold_accuracy=0.85):
+        """Check if model performance degraded"""
+        # This would require ground truth labels
+        # In production, you'd compare predictions with actual outcomes
+        # For now, monitor prediction confidence
+        
+        if len(self.predictions_history) < 100:
+            return False
+        
+        recent_predictions = self.predictions_history[-100:]
+        avg_confidence = np.mean([p["probability"] for p in recent_predictions])
+        
+        if avg_confidence < threshold_accuracy:
+            return True
+        return False
+    
+    def detect_data_drift(self, baseline_features, new_features, threshold=0.1):
+        """Detect if input data distribution changed"""
+        from mlops.data_quality import DataQualityMonitor
+        
+        monitor = DataQualityMonitor()
+        monitor.compute_baseline(baseline_features)
+        drift = monitor.detect_drift(new_features, threshold)
+        
+        return len(drift) > 0, drift
+```
+
+#### Step 5.2: Alerting System
+
+**File:** Create `mlops/alerting.py`
+
+**Code:**
+
+```python
+import smtplib
+from email.mime.text import MIMEText
+from typing import Dict, List
+from datetime import datetime
+
+class AlertManager:
+    def __init__(self, config: Dict):
+        self.config = config
+        self.alert_history = []
+    
+    def send_alert(self, alert_type: str, message: str, severity: str = "warning"):
+        """Send alert via configured channels"""
+        alert = {
+            "timestamp": datetime.now().isoformat(),
+            "type": alert_type,
+            "message": message,
+            "severity": severity
+        }
+        
+        self.alert_history.append(alert)
+        
+        # Email alert
+        if self.config.get("email_enabled", False):
+            self._send_email(alert)
+        
+        # Slack alert
+        if self.config.get("slack_enabled", False):
+            self._send_slack(alert)
+        
+        # Log alert
+        print(f"[{severity.upper()}] {alert_type}: {message}")
+    
+    def _send_email(self, alert: Dict):
+        """Send email alert"""
+        # Implementation for email alerts
+        pass
+    
+    def _send_slack(self, alert: Dict):
+        """Send Slack alert"""
+        # Implementation for Slack webhook
+        pass
+    
+    def check_and_alert(self, monitor: ProductionMonitor):
+        """Check monitoring metrics and send alerts if needed"""
+        # Performance degradation
+        if monitor.check_performance_degradation():
+            self.send_alert(
+                "performance_degradation",
+                "Model performance below threshold",
+                "critical"
+            )
+        
+        # High error rate
+        if monitor.performance_metrics["error_rate"] > 0.05:
+            self.send_alert(
+                "high_error_rate",
+                f"Error rate: {monitor.performance_metrics['error_rate']:.2%}",
+                "warning"
+            )
+        
+        # High latency
+        if monitor.performance_metrics["avg_latency"] > 1.0:  # > 1 second
+            self.send_alert(
+                "high_latency",
+                f"Average latency: {monitor.performance_metrics['avg_latency']:.2f}s",
+                "warning"
+            )
+```
+
+#### Step 5.3: Prometheus Metrics Export
+
+**File:** Create `mlops/metrics_exporter.py`
+
+**Code:**
+
+```python
+from prometheus_client import Counter, Histogram, Gauge, start_http_server
+
+# Define metrics
+predictions_total = Counter(
+    'ddos_predictions_total',
+    'Total number of predictions',
+    ['model_type', 'prediction']
+)
+
+prediction_latency = Histogram(
+    'ddos_prediction_latency_seconds',
+    'Prediction latency in seconds',
+    ['model_type']
+)
+
+model_accuracy = Gauge(
+    'ddos_model_accuracy',
+    'Current model accuracy',
+    ['model_type', 'version']
+)
+
+def export_metrics(port=9090):
+    """Start Prometheus metrics server"""
+    start_http_server(port)
+    print(f"Prometheus metrics server started on port {port}")
+
+# In model_serving.py, add metrics:
+@app.post("/predict")
+async def predict(request: PredictionRequest):
+    start_time = time.time()
+    
+    # ... prediction logic ...
+    
+    # Export metrics
+    predictions_total.labels(
+        model_type=request.model_type,
+        prediction=prediction
+    ).inc()
+    
+    prediction_latency.labels(
+        model_type=request.model_type
+    ).observe(time.time() - start_time)
+```
+
+### Phase 6: Automated Retraining (Week 6-7)
+
+#### Step 6.1: Retraining Trigger Logic
+
+**File:** Create `mlops/retraining_trigger.py`
+
+**Code:**
+
+```python
+from datetime import datetime, timedelta
+from mlops.production_monitor import ProductionMonitor
+from mlops.model_registry import FLModelRegistry
+import mlflow
+
+class RetrainingTrigger:
+    def __init__(self):
+        self.monitor = ProductionMonitor()
+        self.registry = FLModelRegistry()
+        self.last_retraining = None
+    
+    def should_retrain(self) -> tuple[bool, str]:
+        """Determine if retraining is needed"""
+        reasons = []
+        
+        # 1. Scheduled retraining (weekly)
+        if self._is_scheduled_retraining():
+            reasons.append("scheduled_weekly")
+        
+        # 2. Performance degradation
+        if self.monitor.check_performance_degradation():
+            reasons.append("performance_degradation")
+        
+        # 3. Data drift detected
+        if self._check_data_drift():
+            reasons.append("data_drift")
+        
+        # 4. Time since last retraining
+        if self._time_based_retraining():
+            reasons.append("time_based")
+        
+        # 5. New attack patterns (if you have this detection)
+        if self._new_attack_patterns():
+            reasons.append("new_attack_patterns")
+        
+        return len(reasons) > 0, ", ".join(reasons)
+    
+    def _is_scheduled_retraining(self) -> bool:
+        """Check if it's time for scheduled retraining"""
+        # Weekly retraining on Sundays
+        return datetime.now().weekday() == 6  # Sunday
+    
+    def _check_data_drift(self) -> bool:
+        """Check if data drift detected"""
+        # Implementation would compare current data distribution
+        # with baseline
+        return False  # Placeholder
+    
+    def _time_based_retraining(self, days=7) -> bool:
+        """Retrain if X days passed since last retraining"""
+        if self.last_retraining is None:
+            return True
+        
+        days_since = (datetime.now() - self.last_retraining).days
+        return days_since >= days
+    
+    def _new_attack_patterns(self) -> bool:
+        """Detect new attack patterns"""
+        # This would require attack pattern analysis
+        return False  # Placeholder
+    
+    def trigger_retraining(self, model_type: str):
+        """Trigger FL retraining"""
+        import subprocess
+        
+        # Start FL training
+        subprocess.run([
+            "python", "flower_server_metrics.py",
+            "--model-type", model_type,
+            "--num-rounds", "5"
+        ])
+        
+        self.last_retraining = datetime.now()
+```
+
+#### Step 6.2: Retraining Scheduler
+
+**File:** Create `mlops/retraining_scheduler.py`
+
+**Code:**
+
+```python
+import schedule
+import time
+from mlops.retraining_trigger import RetrainingTrigger
+
+class RetrainingScheduler:
+    def __init__(self):
+        self.trigger = RetrainingTrigger()
+        self.model_types = ['MLPv2', 'LSTM', 'CNN1D', 'CNN_LSTM']
+    
+    def setup_schedule(self):
+        """Setup retraining schedule"""
+        # Weekly retraining on Sunday at 2 AM
+        schedule.every().sunday.at("02:00").do(self.weekly_retraining)
+        
+        # Daily check for performance issues
+        schedule.every().day.at("03:00").do(self.check_and_retrain_if_needed)
+    
+    def weekly_retraining(self):
+        """Weekly scheduled retraining"""
+        print("Starting weekly FL retraining...")
+        for model_type in self.model_types:
+            print(f"Retraining {model_type}...")
+            self.trigger.trigger_retraining(model_type)
+    
+    def check_and_retrain_if_needed(self):
+        """Check if retraining needed and trigger if so"""
+        for model_type in self.model_types:
+            should_retrain, reason = self.trigger.should_retrain()
+            if should_retrain:
+                print(f"Retraining {model_type}: {reason}")
+                self.trigger.trigger_retraining(model_type)
+    
+    def run(self):
+        """Run scheduler"""
+        self.setup_schedule()
+        while True:
+            schedule.run_pending()
+            time.sleep(60)  # Check every minute
+
+if __name__ == "__main__":
+    scheduler = RetrainingScheduler()
+    scheduler.run()
+```
+
+### Phase 7: Model Comparison & A/B Testing (Week 7)
+
+#### Step 7.1: Model Comparison Tool
+
+**File:** Create `mlops/model_comparison.py`
+
+**Code:**
+
+```python
+import mlflow
+from mlflow.tracking import MlflowClient
+import pandas as pd
+
+class ModelComparator:
+    def __init__(self):
+        self.client = MlflowClient()
+    
+    def compare_models(self, model_type: str, num_versions: int = 5):
+        """Compare recent model versions"""
+        model_name = f"{model_type}_FL"
+        
+        # Get recent versions
+        versions = self.client.search_model_versions(
+            f"name='{model_name}'",
+            max_results=num_versions
+        )
+        
+        comparison = []
+        for version in versions:
+            run = self.client.get_run(version.run_id)
+            comparison.append({
+                "version": version.version,
+                "round": run.data.params.get("round", "unknown"),
+                "accuracy": run.data.metrics.get("accuracy", 0),
+                "loss": run.data.metrics.get("loss", 0),
+                "timestamp": version.creation_timestamp
+            })
+        
+        df = pd.DataFrame(comparison)
+        return df.sort_values("timestamp", ascending=False)
+    
+    def get_best_model(self, model_type: str):
+        """Get best performing model version"""
+        df = self.compare_models(model_type)
+        if len(df) > 0:
+            best = df.loc[df['accuracy'].idxmax()]
+            return best
+        return None
+```
+
+#### Step 7.2: A/B Testing Framework
+
+**File:** Create `mlops/ab_testing.py`
+
+**Code:**
+
+```python
+import random
+from mlops.model_registry import FLModelRegistry
+from typing import List
+
+class ABTesting:
+    def __init__(self, traffic_split: float = 0.5):
+        """
+        traffic_split: Fraction of traffic to new model (0.5 = 50/50 split)
+        """
+        self.traffic_split = traffic_split
+        self.registry = FLModelRegistry()
+        self.results = {
+            "model_a": {"predictions": 0, "correct": 0},
+            "model_b": {"predictions": 0, "correct": 0}
+        }
+    
+    def route_request(self, model_type: str, features: List):
+        """Route request to A or B model"""
+        # Get current production model (A)
+        model_a = self.registry.get_latest_model(model_type)
+        
+        # Get new candidate model (B)
+        # This would be the newly trained model
+        
+        # Route based on traffic split
+        use_new_model = random.random() < self.traffic_split
+        
+        if use_new_model:
+            return "model_b", model_b
+        else:
+            return "model_a", model_a
+    
+    def record_result(self, model_version: str, prediction: int, 
+                     actual: int, correct: bool):
+        """Record A/B test result"""
+        self.results[model_version]["predictions"] += 1
+        if correct:
+            self.results[model_version]["correct"] += 1
+    
+    def get_winner(self, confidence_level: float = 0.95) -> str:
+        """Determine winner of A/B test"""
+        from scipy import stats
+        
+        model_a_acc = (
+            self.results["model_a"]["correct"] / 
+            max(self.results["model_a"]["predictions"], 1)
+        )
+        model_b_acc = (
+            self.results["model_b"]["correct"] / 
+            max(self.results["model_b"]["predictions"], 1)
+        )
+        
+        # Statistical significance test
+        # (Simplified - would need proper statistical test)
+        if model_b_acc > model_a_acc:
+            return "model_b"
+        return "model_a"
+```
+
+## Implementation Checklist
+
+### Phase 1: Foundation
+
+- [ ] Install MLflow
+- [ ] Set up MLflow tracking server
+- [ ] Integrate MLflow into FL server
+- [ ] Implement model versioning
+- [ ] Set up structured logging
+- [ ] Test experiment tracking
+
+### Phase 2: Data Management
+
+- [ ] Set up DVC for data versioning
+- [ ] Implement data validation
+- [ ] Create data quality monitoring
+- [ ] Set up data drift detection
+- [ ] Test data validation pipeline
+
+### Phase 3: CI/CD
+
+- [ ] Create GitHub Actions workflow
+- [ ] Set up pre-commit hooks
+- [ ] Write unit tests
+- [ ] Configure automated testing
+- [ ] Test CI/CD pipeline
+
+### Phase 4: Deployment
+
+- [ ] Create FastAPI serving endpoint
+- [ ] Dockerize model serving
+- [ ] Add to docker-compose
+- [ ] Test API endpoints
+- [ ] Deploy to staging environment
+
+### Phase 5: Monitoring
+
+- [ ] Implement production monitoring
+- [ ] Set up alerting system
+- [ ] Configure Prometheus metrics
+- [ ] Create monitoring dashboard
+- [ ] Test alerting
+
+### Phase 6: Automation
+
+- [ ] Implement retraining triggers
+- [ ] Set up retraining scheduler
+- [ ] Configure automated retraining
+- [ ] Test retraining pipeline
+
+### Phase 7: Advanced
+
+- [ ] Implement model comparison
+- [ ] Set up A/B testing
+- [ ] Create model selection logic
+- [ ] Test A/B testing framework
+
+## File Structure After Implementation
+
+```
+DDoS_SDN by Aiken Kazin/
+├── mlops/
+│   ├── __init__.py
+│   ├── model_registry.py          # Model versioning
+│   ├── fl_logger.py               # Structured logging
+│   ├── data_validation.py         # Data quality checks
+│   ├── data_quality.py            # Data drift detection
+│   ├── model_serving.py           # FastAPI serving
+│   ├── production_monitor.py      # Production monitoring
+│   ├── alerting.py                # Alert system
+│   ├── metrics_exporter.py        # Prometheus metrics
+│   ├── retraining_trigger.py     # Retraining logic
+│   ├── retraining_scheduler.py   # Scheduled retraining
+│   ├── model_comparison.py        # Model comparison
+│   └── ab_testing.py              # A/B testing
+├── tests/
+│   ├── test_fl_pipeline.py
+│   ├── test_data_validation.py
+│   └── test_model_serving.py
+├── .github/
+│   └── workflows/
+│       └── fl_training.yml        # CI/CD pipeline
+├── .pre-commit-config.yaml        # Pre-commit hooks
+├── mlruns/                        # MLflow artifacts
+├── mlflow.db                      # MLflow database
+└── requirements-mlops.txt         # MLOps dependencies
+```
+
+## Success Metrics
+
+### Phase 1 Success Criteria
+
+- All FL training runs logged to MLflow
+- Models versioned and searchable
+- Round-by-round metrics tracked
+
+### Phase 2 Success Criteria
+
+- Data validation catches issues before training
+- Data drift detected automatically
+- Dataset versions tracked
+
+### Phase 3 Success Criteria
+
+- CI/CD pipeline runs automatically
+- Tests pass before deployment
+- Automated model training on schedule
+
+### Phase 4 Success Criteria
+
+- Models accessible via API
+- API response time < 100ms
+- API uptime > 99%
+
+### Phase 5 Success Criteria
+
+- Production metrics collected
+- Alerts trigger on issues
+- Monitoring dashboard functional
+
+### Phase 6 Success Criteria
+
+- Retraining triggers automatically
+- Models retrain on schedule
+- Performance improves over time
+
+## Timeline Summary
+
+| **Phase** | **Duration** | **Key Deliverables** |
+|-----------|--------------|---------------------|
+| Phase 1: Foundation | Week 1-2 | MLflow integration, model versioning |
+| Phase 2: Data Management | Week 2-3 | Data validation, versioning |
+| Phase 3: CI/CD | Week 3-4 | Automated pipelines, testing |
+| Phase 4: Deployment | Week 4-5 | Model serving API |
+| Phase 5: Monitoring | Week 5-6 | Production monitoring, alerts |
+| Phase 6: Automation | Week 6-7 | Automated retraining |
+| Phase 7: Advanced | Week 7 | A/B testing, model comparison |
+| **Total** | **7 weeks** | **Full MLOps pipeline** |
+
+## Next Steps
+
+1. **Start with Phase 1:** Install MLflow and integrate into FL server
+2. **Test incrementally:** Test each phase before moving to next
+3. **Document as you go:** Update documentation with each change
+4. **Iterate:** Refine based on actual usage
+

@@ -1,0 +1,452 @@
+\documentclass[12pt]{article}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{geometry}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+
+\geometry{margin=1in}
+
+\title{LSTM Internal Mechanisms: Hidden State, Cell State, and Gates}
+\author{Detailed Explanation for DDoS Detection Model}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Overview}
+
+The LSTM model in the code uses two LSTM layers:
+\begin{lstlisting}[language=Python, basicstyle=\ttfamily]
+LSTM(64, return_sequences=True, input_shape=(num_features, 1))
+LSTM(32, return_sequences=False)
+Dense(num_classes, activation='softmax')
+\end{lstlisting}
+
+\section{Core Components}
+
+\subsection{Hidden State ($h_t$)}
+
+\textbf{Definition:} The hidden state is a vector that carries information from previous timesteps and represents the "short-term memory" of the LSTM.
+
+\textbf{Mathematical Representation:}
+\[
+h_t \in \mathbb{R}^d
+\]
+where $d$ is the number of LSTM units (64 for Layer 1, 32 for Layer 2).
+
+\textbf{In Your Code:}
+\begin{itemize}
+    \item \textbf{Layer 1:} $h_t^{(1)} \in \mathbb{R}^{64}$ for each timestep $t$
+    \item \textbf{Layer 2:} $h_t^{(2)} \in \mathbb{R}^{32}$ for each timestep $t$
+\end{itemize}
+
+\textbf{Flow Through Timesteps:}
+\[
+h_0 \xrightarrow{x_1} h_1 \xrightarrow{x_2} h_2 \xrightarrow{x_3} h_3 \xrightarrow{\cdots} h_T
+\]
+
+where $T = \text{num\_features}$ (typically 20 in your dataset).
+
+\textbf{Output Behavior:}
+\begin{itemize}
+    \item \textbf{Layer 1:} $\text{return\_sequences=True}$ $\Rightarrow$ outputs all $h_1^{(1)}, h_2^{(1)}, \ldots, h_T^{(1)}$
+    \item \textbf{Layer 2:} $\text{return\_sequences=False}$ $\Rightarrow$ outputs only final $h_T^{(2)}$
+\end{itemize}
+
+\subsection{Cell State ($c_t$)}
+
+\textbf{Definition:} The cell state is the "long-term memory" that flows through the LSTM, storing information across many timesteps.
+
+\textbf{Mathematical Representation:}
+\[
+c_t \in \mathbb{R}^d
+\]
+
+\textbf{Initialization:}
+\[
+c_0 = \mathbf{0} \quad \text{(zero vector)}
+\]
+
+\textbf{Update Rule:}
+\[
+c_t = f_t \odot c_{t-1} + i_t \odot \tilde{c}_t
+\]
+
+where:
+\begin{itemize}
+    \item $f_t$ = forget gate (what to forget)
+    \item $i_t$ = input gate (what to add)
+    \item $\tilde{c}_t$ = candidate values (new information)
+    \item $\odot$ = element-wise multiplication (Hadamard product)
+\end{itemize}
+
+\textbf{Key Properties:}
+\begin{itemize}
+    \item Flows through the entire sequence: $c_0 \rightarrow c_1 \rightarrow c_2 \rightarrow \cdots \rightarrow c_T$
+    \item Modified by gates at each timestep
+    \item Same dimensionality as hidden state
+\end{itemize}
+
+\section{LSTM Gates}
+
+All gates use sigmoid activation: $\sigma(x) = \frac{1}{1 + e^{-x}} \in [0, 1]$
+
+\subsection{Forget Gate ($f_t$)}
+
+\textbf{Purpose:} Decide what information to forget from the cell state.
+
+\textbf{Mathematical Formula:}
+\[
+f_t = \sigma(W_f \cdot [h_{t-1}, x_t] + b_f)
+\]
+
+where:
+\begin{itemize}
+    \item $W_f \in \mathbb{R}^{d \times (d + d_{in})}$ = forget gate weight matrix
+    \item $b_f \in \mathbb{R}^d$ = forget gate bias vector
+    \item $[h_{t-1}, x_t]$ = concatenation of previous hidden state and current input
+    \item $d_{in}$ = input dimension (1 in your code: $\text{num\_features} \times 1$)
+\end{itemize}
+
+\textbf{Output Interpretation:}
+\[
+f_t[i] = \begin{cases}
+\text{close to 1} & \text{keep information in } c_{t-1}[i] \\
+\text{close to 0} & \text{forget information in } c_{t-1}[i]
+\end{cases}
+\]
+
+\textbf{In Your Code:}
+\begin{itemize}
+    \item \textbf{Layer 1:} $f_t^{(1)} \in \mathbb{R}^{64}$, processes each feature sequentially
+    \item \textbf{Layer 2:} $f_t^{(2)} \in \mathbb{R}^{32}$, processes hidden states from Layer 1
+\end{itemize}
+
+\textbf{Example:}
+\[
+f_t = [0.9, 0.1, 0.8, 0.95, \ldots]
+\]
+\begin{itemize}
+    \item Dimension 1: Keep 90\% of old cell state
+    \item Dimension 2: Keep 10\% of old cell state (forget 90\%)
+    \item Dimension 3: Keep 80\% of old cell state
+    \item Dimension 4: Keep 95\% of old cell state
+\end{itemize}
+
+\subsection{Input Gate ($i_t$) and Candidate Values ($\tilde{c}_t$)}
+
+\textbf{Purpose:} Decide what new information to store in the cell state.
+
+\textbf{Input Gate:}
+\[
+i_t = \sigma(W_i \cdot [h_{t-1}, x_t] + b_i)
+\]
+
+\textbf{Candidate Values:}
+\[
+\tilde{c}_t = \tanh(W_C \cdot [h_{t-1}, x_t] + b_C)
+\]
+
+where:
+\begin{itemize}
+    \item $W_i \in \mathbb{R}^{d \times (d + d_{in})}$ = input gate weight matrix
+    \item $W_C \in \mathbb{R}^{d \times (d + d_{in})}$ = candidate weight matrix
+    \item $b_i, b_C \in \mathbb{R}^d$ = bias vectors
+    \item $\tanh(x) = \frac{e^x - e^{-x}}{e^x + e^{-x}} \in [-1, 1]$ = hyperbolic tangent
+\end{itemize}
+
+\textbf{Interpretation:}
+\begin{itemize}
+    \item $i_t[i]$ = how much of candidate value $\tilde{c}_t[i]$ to add
+    \item $\tilde{c}_t[i]$ = new information value (between -1 and 1)
+\end{itemize}
+
+\textbf{Cell State Update:}
+\[
+c_t = f_t \odot c_{t-1} + i_t \odot \tilde{c}_t
+\]
+
+This combines:
+\begin{enumerate}
+    \item \textbf{Forgetting:} $f_t \odot c_{t-1}$ (what to keep from old state)
+    \item \textbf{Adding:} $i_t \odot \tilde{c}_t$ (what new information to add)
+\end{enumerate}
+
+\textbf{Example:}
+\[
+\begin{aligned}
+c_{t-1} &= [0.5, -0.3, 0.8, \ldots] \\
+f_t &= [0.9, 0.2, 0.7, \ldots] \\
+i_t &= [0.6, 0.8, 0.3, \ldots] \\
+\tilde{c}_t &= [0.4, -0.5, 0.2, \ldots] \\
+c_t &= [0.9, 0.2, 0.7, \ldots] \odot [0.5, -0.3, 0.8, \ldots] + [0.6, 0.8, 0.3, \ldots] \odot [0.4, -0.5, 0.2, \ldots] \\
+&= [0.45, -0.06, 0.56, \ldots] + [0.24, -0.40, 0.06, \ldots] \\
+&= [0.69, -0.46, 0.62, \ldots]
+\end{aligned}
+\]
+
+\subsection{Output Gate ($o_t$)}
+
+\textbf{Purpose:} Decide what parts of the cell state to output as the hidden state.
+
+\textbf{Mathematical Formula:}
+\[
+o_t = \sigma(W_o \cdot [h_{t-1}, x_t] + b_o)
+\]
+
+where:
+\begin{itemize}
+    \item $W_o \in \mathbb{R}^{d \times (d + d_{in})}$ = output gate weight matrix
+    \item $b_o \in \mathbb{R}^d$ = output gate bias vector
+\end{itemize}
+
+\textbf{Hidden State Computation:}
+\[
+h_t = o_t \odot \tanh(c_t)
+\]
+
+\textbf{Interpretation:}
+\begin{itemize}
+    \item $\tanh(c_t)$ = filtered cell state (scaled to $[-1, 1]$)
+    \item $o_t$ = filter to decide what to output
+    \item $h_t$ = final hidden state (what the LSTM "remembers" for next timestep)
+\end{itemize}
+
+\textbf{Example:}
+\[
+\begin{aligned}
+c_t &= [0.69, -0.46, 0.62, \ldots] \\
+\tanh(c_t) &= [0.60, -0.43, 0.55, \ldots] \\
+o_t &= [0.8, 0.3, 0.9, \ldots] \\
+h_t &= [0.8, 0.3, 0.9, \ldots] \odot [0.60, -0.43, 0.55, \ldots] \\
+&= [0.48, -0.13, 0.50, \ldots]
+\end{aligned}
+\]
+
+\section{Complete LSTM Computation at Timestep $t$}
+
+\subsection{Step-by-Step Algorithm}
+
+For each timestep $t$ (each feature in your code):
+
+\textbf{Input:}
+\begin{itemize}
+    \item $x_t$ = current feature value (scalar in your case: $x_t \in \mathbb{R}$)
+    \item $h_{t-1}$ = previous hidden state ($h_{t-1} \in \mathbb{R}^d$)
+    \item $c_{t-1}$ = previous cell state ($c_{t-1} \in \mathbb{R}^d$)
+\end{itemize}
+
+\textbf{Step 1: Concatenate Input}
+\[
+z_t = [h_{t-1}, x_t] \in \mathbb{R}^{d + d_{in}}
+\]
+
+\textbf{Step 2: Compute Forget Gate}
+\[
+f_t = \sigma(W_f \cdot z_t + b_f)
+\]
+
+\textbf{Step 3: Compute Input Gate}
+\[
+i_t = \sigma(W_i \cdot z_t + b_i)
+\]
+
+\textbf{Step 4: Compute Candidate Values}
+\[
+\tilde{c}_t = \tanh(W_C \cdot z_t + b_C)
+\]
+
+\textbf{Step 5: Update Cell State}
+\[
+c_t = f_t \odot c_{t-1} + i_t \odot \tilde{c}_t
+\]
+
+\textbf{Step 6: Compute Output Gate}
+\[
+o_t = \sigma(W_o \cdot z_t + b_o)
+\]
+
+\textbf{Step 7: Compute Hidden State}
+\[
+h_t = o_t \odot \tanh(c_t)
+\]
+
+\textbf{Output:}
+\begin{itemize}
+    \item $h_t$ = new hidden state
+    \item $c_t$ = new cell state
+\end{itemize}
+
+\subsection{Matrix Formulation}
+
+All gates can be computed simultaneously:
+
+\[
+\begin{bmatrix}
+f_t \\
+i_t \\
+o_t \\
+\tilde{c}_t
+\end{bmatrix}
+=
+\begin{bmatrix}
+\sigma(W_f \cdot z_t + b_f) \\
+\sigma(W_i \cdot z_t + b_i) \\
+\sigma(W_o \cdot z_t + b_o) \\
+\tanh(W_C \cdot z_t + b_C)
+\end{bmatrix}
+\]
+
+Then:
+\[
+\begin{aligned}
+c_t &= f_t \odot c_{t-1} + i_t \odot \tilde{c}_t \\
+h_t &= o_t \odot \tanh(c_t)
+\end{aligned}
+\]
+
+\section{In Your Specific Code}
+
+\subsection{Layer 1: LSTM(64)}
+
+\textbf{Input Shape:} $(N, T, 1)$ where:
+\begin{itemize}
+    \item $N$ = batch size
+    \item $T$ = num\_features (typically 20)
+    \item $1$ = feature dimension
+\end{itemize}
+
+\textbf{Processing:}
+\[
+\begin{aligned}
+\text{For } t = 1, 2, \ldots, T: \\
+&\quad x_t \in \mathbb{R} \quad \text{(feature } t \text{ value)} \\
+&\quad h_{t-1}^{(1)} \in \mathbb{R}^{64} \quad \text{(previous hidden state)} \\
+&\quad c_{t-1}^{(1)} \in \mathbb{R}^{64} \quad \text{(previous cell state)} \\
+&\quad z_t = [h_{t-1}^{(1)}, x_t] \in \mathbb{R}^{65} \\
+&\quad \text{Compute gates: } f_t^{(1)}, i_t^{(1)}, o_t^{(1)}, \tilde{c}_t^{(1)} \in \mathbb{R}^{64} \\
+&\quad c_t^{(1)} = f_t^{(1)} \odot c_{t-1}^{(1)} + i_t^{(1)} \odot \tilde{c}_t^{(1)} \\
+&\quad h_t^{(1)} = o_t^{(1)} \odot \tanh(c_t^{(1)})
+\end{aligned}
+\]
+
+\textbf{Output:} Since $\text{return\_sequences=True}$:
+\[
+H^{(1)} = [h_1^{(1)}, h_2^{(1)}, \ldots, h_T^{(1)}] \in \mathbb{R}^{T \times 64}
+\]
+
+\subsection{Layer 2: LSTM(32)}
+
+\textbf{Input:} $H^{(1)} \in \mathbb{R}^{T \times 64}$ (sequence from Layer 1)
+
+\textbf{Processing:}
+\[
+\begin{aligned}
+\text{For } t = 1, 2, \ldots, T: \\
+&\quad h_t^{(1)} \in \mathbb{R}^{64} \quad \text{(hidden state from Layer 1)} \\
+&\quad h_{t-1}^{(2)} \in \mathbb{R}^{32} \quad \text{(previous hidden state)} \\
+&\quad c_{t-1}^{(2)} \in \mathbb{R}^{32} \quad \text{(previous cell state)} \\
+&\quad z_t = [h_{t-1}^{(2)}, h_t^{(1)}] \in \mathbb{R}^{96} \quad \text{(concatenate 32 + 64)} \\
+&\quad \text{Compute gates: } f_t^{(2)}, i_t^{(2)}, o_t^{(2)}, \tilde{c}_t^{(2)} \in \mathbb{R}^{32} \\
+&\quad c_t^{(2)} = f_t^{(2)} \odot c_{t-1}^{(2)} + i_t^{(2)} \odot \tilde{c}_t^{(2)} \\
+&\quad h_t^{(2)} = o_t^{(2)} \odot \tanh(c_t^{(2)})
+\end{aligned}
+\]
+
+\textbf{Output:} Since $\text{return\_sequences=False}$:
+\[
+h_T^{(2)} \in \mathbb{R}^{32} \quad \text{(only final hidden state)}
+\]
+
+\subsection{Final Classification}
+
+\[
+\begin{aligned}
+h_T^{(2)} &\in \mathbb{R}^{32} \quad \text{(final hidden state)} \\
+\hat{y} &= \text{softmax}(W_{out} \cdot h_T^{(2)} + b_{out}) \\
+\hat{y} &\in \mathbb{R}^{C} \quad \text{(class probabilities)}
+\end{aligned}
+\]
+
+where $C = \text{num\_classes}$ (2 for binary classification).
+
+\section{Parameter Count}
+
+\subsection{Layer 1: LSTM(64)}
+
+For each gate, weight matrix size: $W \in \mathbb{R}^{64 \times 65}$ (64 units, 65 inputs: 64 from $h_{t-1}$ + 1 from $x_t$)
+
+\[
+\begin{aligned}
+\text{Forget Gate:} &\quad W_f: 64 \times 65 = 4,160 \text{ params}, \quad b_f: 64 \text{ params} \\
+\text{Input Gate:} &\quad W_i: 64 \times 65 = 4,160 \text{ params}, \quad b_i: 64 \text{ params} \\
+\text{Output Gate:} &\quad W_o: 64 \times 65 = 4,160 \text{ params}, \quad b_o: 64 \text{ params} \\
+\text{Candidate:} &\quad W_C: 64 \times 65 = 4,160 \text{ params}, \quad b_C: 64 \text{ params} \\
+\text{Total Layer 1:} &\quad 4 \times (4,160 + 64) = 16,896 \text{ parameters}
+\end{aligned}
+\]
+
+\subsection{Layer 2: LSTM(32)}
+
+Weight matrix size: $W \in \mathbb{R}^{32 \times 96}$ (32 units, 96 inputs: 32 from $h_{t-1}^{(2)}$ + 64 from $h_t^{(1)}$)
+
+\[
+\begin{aligned}
+\text{Forget Gate:} &\quad W_f: 32 \times 96 = 3,072 \text{ params}, \quad b_f: 32 \text{ params} \\
+\text{Input Gate:} &\quad W_i: 32 \times 96 = 3,072 \text{ params}, \quad b_i: 32 \text{ params} \\
+\text{Output Gate:} &\quad W_o: 32 \times 96 = 3,072 \text{ params}, \quad b_o: 32 \text{ params} \\
+\text{Candidate:} &\quad W_C: 32 \times 96 = 3,072 \text{ params}, \quad b_C: 32 \text{ params} \\
+\text{Total Layer 2:} &\quad 4 \times (3,072 + 32) = 12,416 \text{ parameters}
+\end{aligned}
+\]
+
+\subsection{Output Layer}
+
+\[
+\text{Dense: } 32 \times C + C \text{ parameters}
+\]
+
+\subsection{Total Parameters}
+
+\[
+\text{Total} = 16,896 + 12,416 + (32C + C) = 29,312 + 33C
+\]
+
+For binary classification ($C = 2$): $\text{Total} = 29,378$ parameters
+
+\section{Key Differences: Hidden State vs Cell State}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Aspect} & \textbf{Hidden State ($h_t$)} & \textbf{Cell State ($c_t$)} \\
+\hline
+Purpose & Short-term memory, output & Long-term memory, storage \\
+Visibility & Exposed to next layer & Internal to LSTM \\
+Update & Filtered cell state & Direct gate operations \\
+Range & $[-1, 1]$ (via $\tanh$) & Unbounded (before $\tanh$) \\
+Output & Used for predictions & Used internally \\
+\hline
+\end{tabular}
+\caption{Comparison of Hidden State and Cell State}
+\end{table}
+
+\section{Summary}
+
+The LSTM processes your tabular features sequentially:
+\begin{enumerate}
+    \item Each feature becomes a timestep
+    \item At each timestep, gates control information flow
+    \item Cell state stores long-term information
+    \item Hidden state represents what to output
+    \item Final hidden state goes to classification layer
+\end{enumerate}
+
+All gate computations are handled automatically by TensorFlow's \texttt{LSTM()} layer—you don't need to implement them manually.
+
+\end{document}
+
