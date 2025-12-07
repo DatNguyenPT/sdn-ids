@@ -127,6 +127,7 @@ services:
       - FL_EPOCHS_PER_ROUND=5
       - FL_BATCH_SIZE=32
       - FL_ENABLE_DP=${FL_ENABLE_DP:-false}
+      - IID=${IID:-true}
     command: >
       python flower_worker.py
       --server-address flower-server-mlpv2:8080
@@ -159,6 +160,7 @@ services:
       - FL_EPOCHS_PER_ROUND=5
       - FL_BATCH_SIZE=32
       - FL_ENABLE_DP=${FL_ENABLE_DP:-false}
+      - IID=${IID:-true}
     command: >
       python flower_worker.py
       --server-address flower-server-mlpv2:8080
@@ -191,6 +193,7 @@ services:
       - FL_EPOCHS_PER_ROUND=5
       - FL_BATCH_SIZE=32
       - FL_ENABLE_DP=${FL_ENABLE_DP:-false}
+      - IID=${IID:-true}
     command: >
       python flower_worker.py
       --server-address flower-server-cnn1d:8080
@@ -223,6 +226,7 @@ services:
       - FL_EPOCHS_PER_ROUND=5
       - FL_BATCH_SIZE=32
       - FL_ENABLE_DP=${FL_ENABLE_DP:-false}
+      - IID=${IID:-true}
     command: >
       python flower_worker.py
       --server-address flower-server-cnn1d:8080
@@ -255,6 +259,7 @@ services:
       - FL_EPOCHS_PER_ROUND=5
       - FL_BATCH_SIZE=32
       - FL_ENABLE_DP=${FL_ENABLE_DP:-false}
+      - IID=${IID:-true}
     command: >
       python flower_worker.py
       --server-address flower-server-lstm:8080
@@ -287,6 +292,7 @@ services:
       - FL_EPOCHS_PER_ROUND=5
       - FL_BATCH_SIZE=32
       - FL_ENABLE_DP=${FL_ENABLE_DP:-false}
+      - IID=${IID:-true}
     command: >
       python flower_worker.py
       --server-address flower-server-lstm:8080
@@ -319,6 +325,7 @@ services:
       - FL_EPOCHS_PER_ROUND=5
       - FL_BATCH_SIZE=32
       - FL_ENABLE_DP=${FL_ENABLE_DP:-false}
+      - IID=${IID:-true}
     command: >
       python flower_worker.py
       --server-address flower-server-cnn_lstm:8080
@@ -351,6 +358,7 @@ services:
       - FL_EPOCHS_PER_ROUND=5
       - FL_BATCH_SIZE=32
       - FL_ENABLE_DP=${FL_ENABLE_DP:-false}
+      - IID=${IID:-true}
     command: >
       python flower_worker.py
       --server-address flower-server-cnn_lstm:8080

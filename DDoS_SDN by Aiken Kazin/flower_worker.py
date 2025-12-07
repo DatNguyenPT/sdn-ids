@@ -81,7 +81,8 @@ class FlowerWorker(fl.client.NumPyClient):
         enable_dp: bool = False,
         dp_clip_norm: float = 1.0,
         dp_noise_multiplier: float = 1.0,
-        dp_delta: float = 1e-5
+        dp_delta: float = 1e-5,
+        iid: bool = True
     ):
         """
         Initialize the Flower worker.
@@ -97,6 +98,7 @@ class FlowerWorker(fl.client.NumPyClient):
             dp_clip_norm: Gradient clipping norm for DP (default: 1.0)
             dp_noise_multiplier: Noise multiplier for DP (default: 1.0)
             dp_delta: Delta parameter for DP (default: 1e-5)
+            iid: Use IID data distribution (default: True). If False, uses Non-IID (class-skewed)
         """
         self.worker_id = worker_id
         self.data_partition = data_partition
@@ -106,6 +108,7 @@ class FlowerWorker(fl.client.NumPyClient):
         self.total_rounds = total_rounds
         self.current_round = 0
         self.training_complete = False
+        self.iid = iid  # IID distribution flag
         
         # Differential Privacy settings
         self.enable_dp = enable_dp and DP_AVAILABLE
@@ -130,6 +133,7 @@ class FlowerWorker(fl.client.NumPyClient):
         logger.info(f"  - Features: {self.num_features}, Classes: {self.num_classes}")
         logger.info(f"  - Model type: {model_type}")
         logger.info(f"  - Total rounds: {total_rounds}")
+        logger.info(f"  - Data Distribution: {'📊 IID (Independent and Identically Distributed)' if self.iid else '⚠️ Non-IID (Class-Skewed)'}")
         if self.enable_dp:
             logger.info(f"  - 🔒 Differential Privacy: ENABLED")
             logger.info(f"    - Clip norm: {dp_clip_norm}")
@@ -154,21 +158,86 @@ class FlowerWorker(fl.client.NumPyClient):
         # Split dataset
         X_train, X_test, y_train, y_test = split_dataset(df)
         
-        # Partition data (simulate different data distributions per worker)
-        if self.data_partition < 1.0:
-            # Use a subset of data
-            n_samples = int(len(X_train) * self.data_partition)
-            indices = np.random.RandomState(seed=hash(self.worker_id) % 2**32).choice(
-                len(X_train), size=n_samples, replace=False
-            )
-            # Use iloc to select rows by position, not column names
-            # X_train is a DataFrame, y_train is a Series from train_test_split
+        # Partition data based on IID/Non-IID setting
+        if self.iid:
+            # IID Distribution: Random sampling with preserved class distribution
+            if self.data_partition < 1.0:
+                n_samples = int(len(X_train) * self.data_partition)
+                seed = hash(self.worker_id) % 2**32
+                indices = np.random.RandomState(seed=seed).choice(
+                    len(X_train), size=n_samples, replace=False
+                )
+                X_train = X_train.iloc[indices].reset_index(drop=True)
+                if isinstance(y_train, pd.Series):
+                    y_train = y_train.iloc[indices].reset_index(drop=True)
+                else:
+                    y_train = y_train[indices]
+            
+            # Log class distribution for IID
+            if len(np.unique(y_train)) > 0:
+                class_counts = np.bincount(y_train)
+                total_samples = len(y_train)
+                class_0_pct = (class_counts[0] / total_samples * 100) if len(class_counts) > 0 else 0
+                class_1_pct = (class_counts[1] / total_samples * 100) if len(class_counts) > 1 else 0
+                logger.info(f"[{self.worker_id}] IID Distribution - Class 0: {class_0_pct:.2f}%, Class 1: {class_1_pct:.2f}%")
+        else:
+            # Non-IID Distribution: Class-skewed distribution
+            # Odd workers: 80% class 0, 20% class 1
+            # Even workers: 20% class 0, 80% class 1
+            
+            # Extract worker number from worker_id (e.g., "worker1" -> 1, "worker2" -> 2)
+            worker_num_str = ''.join(filter(str.isdigit, self.worker_id))
+            worker_num = int(worker_num_str) if worker_num_str else 1
+            is_odd_worker = (worker_num % 2 == 1)
+            
+            # Get indices for each class
+            if isinstance(y_train, pd.Series):
+                y_train_array = y_train.values
+            else:
+                y_train_array = y_train
+            
+            class_0_indices = np.where(y_train_array == 0)[0]
+            class_1_indices = np.where(y_train_array == 1)[0]
+            
+            # Calculate sample sizes based on data_partition and class skew
+            total_samples_needed = int(len(X_train) * self.data_partition)
+            
+            if is_odd_worker:
+                # Odd workers: 80% class 0, 20% class 1
+                n_class_0 = min(int(total_samples_needed * 0.8), len(class_0_indices))
+                n_class_1 = min(total_samples_needed - n_class_0, len(class_1_indices))
+                logger.info(f"[{self.worker_id}] Non-IID Distribution (Odd Worker) - 80% Class 0, 20% Class 1")
+            else:
+                # Even workers: 20% class 0, 80% class 1
+                n_class_1 = min(int(total_samples_needed * 0.8), len(class_1_indices))
+                n_class_0 = min(total_samples_needed - n_class_1, len(class_0_indices))
+                logger.info(f"[{self.worker_id}] Non-IID Distribution (Even Worker) - 20% Class 0, 80% Class 1")
+            
+            # Sample from each class
+            seed = hash(self.worker_id) % 2**32
+            rng = np.random.RandomState(seed)
+            
+            selected_class_0 = rng.choice(class_0_indices, size=n_class_0, replace=False)
+            selected_class_1 = rng.choice(class_1_indices, size=n_class_1, replace=False)
+            
+            # Combine and shuffle
+            indices = np.concatenate([selected_class_0, selected_class_1])
+            rng.shuffle(indices)
+            
+            # Select data
             X_train = X_train.iloc[indices].reset_index(drop=True)
             if isinstance(y_train, pd.Series):
                 y_train = y_train.iloc[indices].reset_index(drop=True)
             else:
-                # If it's a numpy array
                 y_train = y_train[indices]
+            
+            # Log class distribution for Non-IID
+            if len(np.unique(y_train)) > 0:
+                class_counts = np.bincount(y_train)
+                total_samples = len(y_train)
+                class_0_pct = (class_counts[0] / total_samples * 100) if len(class_counts) > 0 else 0
+                class_1_pct = (class_counts[1] / total_samples * 100) if len(class_counts) > 1 else 0
+                logger.info(f"[{self.worker_id}] Non-IID Distribution - Class 0: {class_0_pct:.2f}%, Class 1: {class_1_pct:.2f}%")
         
         self.X_train = X_train
         self.X_test = X_test
@@ -403,7 +472,8 @@ class FlowerWorker(fl.client.NumPyClient):
             "current_round": self.current_round,
             "model_params_count": model_params_count,
             "num_features": self.num_features,
-            "num_classes": self.num_classes
+            "num_classes": self.num_classes,
+            "iid": self.iid  # IID distribution flag
         }
         
         # Add DP metrics if enabled
@@ -538,6 +608,18 @@ def main():
         default=1e-5,
         help='Delta parameter for DP (default: 1e-5)'
     )
+    parser.add_argument(
+        '--iid',
+        action='store_true',
+        default=True,
+        help='Use IID data distribution (default: True). Use --no-iid for Non-IID distribution.'
+    )
+    parser.add_argument(
+        '--no-iid',
+        dest='iid',
+        action='store_false',
+        help='Use Non-IID data distribution (class-skewed)'
+    )
     
     args = parser.parse_args()
     
@@ -546,6 +628,15 @@ def main():
     if enable_dp_env in ('true', '1', 'yes'):
         args.enable_dp = True
         logger.info("Differential Privacy enabled via FL_ENABLE_DP environment variable")
+    
+    # Check environment variable for IID flag (docker-compose can set IID)
+    iid_env = os.getenv('IID', '').lower()
+    if iid_env in ('false', '0', 'no'):
+        args.iid = False
+        logger.info("Non-IID distribution enabled via IID environment variable")
+    elif iid_env in ('true', '1', 'yes'):
+        args.iid = True
+        logger.info("IID distribution enabled via IID environment variable")
     
     # Validate data partition
     if not 0.0 < args.data_partition <= 1.0:
@@ -561,6 +652,7 @@ def main():
     print(f" Epochs/Round:    {args.epochs_per_round}")
     print(f" Batch Size:      {args.batch_size}")
     print(f" Total Rounds:    {args.total_rounds}")
+    print(f" Data Distribution: {'📊 IID' if args.iid else '⚠️ Non-IID'}")
     print(f" Differential Privacy: {'🔒 ENABLED' if args.enable_dp else 'DISABLED'}")
     if args.enable_dp:
         print(f"  - Clip Norm:     {args.dp_clip_norm}")
@@ -583,7 +675,8 @@ def main():
             enable_dp=args.enable_dp,
             dp_clip_norm=args.dp_clip_norm,
             dp_noise_multiplier=args.dp_noise_multiplier,
-            dp_delta=args.dp_delta
+            dp_delta=args.dp_delta,
+            iid=args.iid
         )
         
         # Start Flower client - this will block until training completes

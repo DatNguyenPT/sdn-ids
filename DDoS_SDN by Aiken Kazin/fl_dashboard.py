@@ -54,7 +54,8 @@ metrics = defaultdict(lambda: {
         "dp_clip_norm": 0.0,
         "dp_noise_multiplier": 0.0,
         "workers_with_dp": set()
-    }
+    },
+    "iid": True  # IID distribution flag (default: True)
 })
 
 # Dashboard HTML template with per-model sections
@@ -143,6 +144,22 @@ DASHBOARD_HTML = """
         .dp-disabled {
             background-color: #f8d7da;
             color: #721c24;
+        }
+        .iid-badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 0.75em;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+        .iid-enabled {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .iid-disabled {
+            background-color: #fff3cd;
+            color: #856404;
         }
         .dp-section {
             background: #f0f8ff;
@@ -287,12 +304,38 @@ DASHBOARD_HTML = """
                 const dpNoiseMult = modelData.dp ? (modelData.dp.dp_noise_multiplier || 0) : 0;
                 const dpEpsilonPerRound = modelData.dp ? (modelData.dp.epsilon_per_round || []) : [];
                 
+                // IID status - handle all possible false values
+                // Check the raw value first for debugging
+                const rawIidValue = modelData.iid;
+                let iidEnabled = true; // Default to true
+                
+                // Explicitly check for false values (handle boolean false, string "false", etc.)
+                if (rawIidValue === false || rawIidValue === "false" || rawIidValue === "False" || 
+                    rawIidValue === 0 || rawIidValue === "0" || rawIidValue === null) {
+                    iidEnabled = false;
+                } else if (rawIidValue === true || rawIidValue === "true" || rawIidValue === "True" || 
+                           rawIidValue === 1 || rawIidValue === "1") {
+                    iidEnabled = true;
+                } else if (rawIidValue !== undefined) {
+                    // If value exists but doesn't match known patterns, default to true
+                    iidEnabled = true;
+                }
+                // If undefined, iidEnabled stays true (default)
+                
+                // Debug logging (check browser console)
+                if (rawIidValue !== undefined) {
+                    console.log('[IID Debug] ' + modelType + ': rawIidValue=' + rawIidValue + ' (type: ' + typeof rawIidValue + '), iidEnabled=' + iidEnabled);
+                }
+                
                 modelSectionsHtml += `
                     <div class="model-section">
                         <div class="model-header">
                             <div class="model-title">${modelType}
                                 <span class="dp-badge ${dpEnabled ? 'dp-enabled' : 'dp-disabled'}">
                                     🔒 DP: ${dpEnabled ? 'ENABLED' : 'DISABLED'}
+                                </span>
+                                <span class="iid-badge ${iidEnabled ? 'iid-enabled' : 'iid-disabled'}">
+                                    📊 IID: ${iidEnabled ? 'ENABLED' : 'DISABLED'}
                                 </span>
                             </div>
                             <div class="model-status ${statusClass}">${statusText} - Round ${currentRound}/${totalRounds}</div>
@@ -571,6 +614,7 @@ def get_metrics():
             "params_sent_per_round": model_metrics.get("params_sent_per_round", []),
             "params_received_per_round": model_metrics.get("params_received_per_round", []),
             "model_params_count": model_metrics.get("model_params_count", 0),
+            "iid": model_metrics.get("iid", True),
             "dp": {
                 "enabled": model_metrics.get("dp", {}).get("enabled", False),
                 "epsilon_per_round": model_metrics.get("dp", {}).get("epsilon_per_round", []),
@@ -597,6 +641,8 @@ def update_metrics():
     
     # Initialize model metrics if not exists
     if model_type not in metrics:
+        # Initialize IID from data if available, otherwise default to True
+        initial_iid = data.get("iid", True) if "iid" in data else True
         metrics[model_type] = {
             "rounds": [],
             "workers": {},
@@ -623,7 +669,8 @@ def update_metrics():
                 "dp_clip_norm": 0.0,
                 "dp_noise_multiplier": 0.0,
                 "workers_with_dp": set()
-            }
+            },
+            "iid": bool(initial_iid)  # Initialize from data if available
         }
     
     model_metrics = metrics[model_type]
@@ -755,6 +802,11 @@ def update_metrics():
     # Track which workers have DP enabled
     if "worker_id" in data and data.get("dp_enabled", False):
         model_metrics["dp"]["workers_with_dp"].add(data["worker_id"])
+    
+    # Update IID status - always update if present, even if False
+    if "iid" in data:
+        model_metrics["iid"] = bool(data["iid"])
+        print(f"[Dashboard] Updated IID status for {model_type}: {bool(data['iid'])}")
     
     return jsonify({"status": "ok", "model_type": model_type})
 

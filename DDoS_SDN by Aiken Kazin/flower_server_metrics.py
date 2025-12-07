@@ -371,8 +371,9 @@ class MetricsFedAvg(FedAvg):
                         self.num_classes = worker_num_classes
                         logger.debug(f"Updated num_classes from worker: {self.num_classes}")
             
-            # Forward DP metrics from worker to dashboard
+            # Forward DP metrics and IID status from worker to dashboard
             dp_metrics = {}
+            iid_status = None
             if fit_res.metrics:
                 if "dp_enabled" in fit_res.metrics:
                     dp_metrics["dp_enabled"] = fit_res.metrics["dp_enabled"]
@@ -384,14 +385,21 @@ class MetricsFedAvg(FedAvg):
                     dp_metrics["dp_clip_norm"] = fit_res.metrics["dp_clip_norm"]
                 if "dp_noise_multiplier" in fit_res.metrics:
                     dp_metrics["dp_noise_multiplier"] = fit_res.metrics["dp_noise_multiplier"]
+                if "iid" in fit_res.metrics:
+                    iid_status = fit_res.metrics["iid"]
             
-            self._send_to_dashboard({
+            dashboard_data = {
                 "round": rnd,
                 "worker_id": worker_id,
                 "active": True,
                 "model_type": model_type,
                 **dp_metrics  # Include DP metrics if present
-            })
+            }
+            if iid_status is not None:
+                dashboard_data["iid"] = iid_status
+                logger.debug(f"Round {rnd}: Worker {worker_id} IID status: {iid_status}")
+            
+            self._send_to_dashboard(dashboard_data)
         
         # Send model params count to dashboard
         if model_params_count > 0:
@@ -433,7 +441,17 @@ class MetricsFedAvg(FedAvg):
         accuracy = aggregated_metrics.get("accuracy", 0.0) if aggregated_metrics else 0.0
         loss = aggregated_metrics.get("loss", 0.0) if aggregated_metrics else 0.0
         
-        self._send_to_dashboard({
+        # Extract IID status from worker results (assume all workers have same IID setting)
+        # Check all results to find IID status - don't default, let dashboard use its own default
+        iid_status = None
+        if results:
+            for client, fit_res in results:
+                if fit_res.metrics and "iid" in fit_res.metrics:
+                    iid_status = bool(fit_res.metrics["iid"])  # Explicitly convert to bool
+                    logger.info(f"Round {rnd}: Extracted IID status from worker: {iid_status}")
+                    break  # Use first found IID status (all workers should have same setting)
+        
+        dashboard_data = {
             "round": rnd,
             "bytes_received": total_bytes_received,
             "params_received": total_params_received,
@@ -441,7 +459,30 @@ class MetricsFedAvg(FedAvg):
             "accuracy": float(accuracy),
             "loss": float(loss),
             "model_type": self.model_type
-        })
+        }
+        
+        # Always include IID if we found it (don't force default)
+        if iid_status is not None:
+            dashboard_data["iid"] = iid_status
+            logger.info(f"Round {rnd}: Sending IID status to dashboard: {iid_status}")
+        else:
+            logger.warning(f"Round {rnd}: No IID status found in worker metrics")
+        
+        # Forward DP metrics from worker results if available
+        if results and results[0][1].metrics:
+            worker_metrics = results[0][1].metrics
+            if worker_metrics.get("dp_enabled"):
+                dashboard_data.update({
+                    "dp_enabled": True,
+                    "epsilon_this_round": worker_metrics.get("epsilon_this_round", 0.0),
+                    "epsilon_total": worker_metrics.get("epsilon_total", 0.0),
+                    "dp_clip_norm": worker_metrics.get("dp_clip_norm", 0.0),
+                    "dp_noise_multiplier": worker_metrics.get("dp_noise_multiplier", 0.0)
+                })
+            else:
+                dashboard_data["dp_enabled"] = False
+        
+        self._send_to_dashboard(dashboard_data)
         
         # Get model types from results
         model_types = []
