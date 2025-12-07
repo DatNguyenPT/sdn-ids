@@ -2,25 +2,22 @@
 
 ## ✅ Completed: Phase 3 - CI/CD Pipeline
 
+**Note**: Initially implemented with GitHub Actions, but migrated to Jenkins due to disk space limitations.
+
 ### What Was Implemented
 
-#### 1. GitHub Actions Workflows
+#### 1. CI/CD Pipeline (Jenkins)
 
-**Main FL Training Workflow** (`.github/workflows/fl_training.yml`):
-- ✅ Scheduled weekly retraining (Sunday 2 AM UTC)
-- ✅ Manual trigger with options (model type, rounds, DP, IID)
+**Jenkins Pipeline** (`Jenkinsfile`):
+- ✅ Parameterized builds (model type, rounds, DP, IID)
 - ✅ Data validation before training
 - ✅ Code quality checks
-- ✅ FL training orchestration
+- ✅ FL training orchestration (parallel builds)
 - ✅ Model evaluation
-- ✅ Artifact upload
-- ✅ Training summary
+- ✅ Artifact storage
+- ✅ MLflow data export
 
-**CI Workflow** (`.github/workflows/ci.yml`):
-- ✅ Quick checks on PRs
-- ✅ Dataset validation
-- ✅ Import checks
-- ✅ Code linting
+**Note**: Migrated from GitHub Actions to Jenkins due to disk space limitations.
 
 #### 2. Pre-commit Hooks (`.pre-commit-config.yaml`)
 - ✅ Trailing whitespace removal
@@ -41,9 +38,10 @@
 ### Files Created/Modified
 
 **New Files:**
-- `.github/workflows/fl_training.yml` - Main FL training workflow
-- `.github/workflows/ci.yml` - CI workflow for PRs
+- `Jenkinsfile` - Jenkins pipeline for FL training
 - `.pre-commit-config.yaml` - Pre-commit hooks configuration
+- `JENKINS_SETUP.md` - Jenkins setup guide
+- `JENKINS_MIGRATION.md` - Migration guide
 - `tests/__init__.py` - Test package
 - `tests/test_data_validation.py` - Data validation tests
 - `tests/test_model_creation.py` - Model creation tests
@@ -168,11 +166,12 @@ pytest tests/test_data_validation.py -v
 - Generates evaluation reports
 - Compares with previous models
 
-### GitHub Actions Benefits
+### Jenkins Benefits
 
-✅ **Automated Retraining**
-- Weekly scheduled training
-- No manual intervention
+✅ **Unlimited Resources**
+- No disk space limitations
+- Full control over resources
+- Build all models in parallel
 
 ✅ **Quality Assurance**
 - Data validation before training
@@ -185,34 +184,33 @@ pytest tests/test_data_validation.py -v
 - Version control everything
 
 ✅ **Time Saving**
-- No manual triggers needed
+- Parameterized builds
 - Automated monitoring
-- Automatic artifact storage
+- Built-in artifact storage
 
 ✅ **Research-Friendly**
-- Free for research projects
-- Easy to configure
-- Good documentation
+- Full control for research
+- Flexible configuration
+- Better for complex pipelines
 
 ### Next Steps
 
-#### To Use GitHub Actions:
+#### To Use Jenkins:
 
-1. **Push to GitHub:**
-   ```bash
-   git add .github/
-   git commit -m "Add CI/CD workflows"
-   git push
-   ```
+1. **Install Jenkins:**
+   - See `JENKINS_SETUP.md` for detailed instructions
+   - Docker: `docker run -d -p 8080:8080 jenkins/jenkins:lts`
 
-2. **Enable Actions:**
-   - Go to repository Settings → Actions
-   - Enable GitHub Actions (if not already)
+2. **Create Pipeline:**
+   - New Item → Pipeline
+   - Pipeline script from SCM
+   - Point to repository
+   - Script Path: `DDoS_SDN by Aiken Kazin/Jenkinsfile`
 
-3. **Test Workflow:**
-   - Go to Actions tab
-   - Manually trigger workflow
-   - Monitor execution
+3. **Run Pipeline:**
+   - Build with Parameters
+   - Select MODEL_TYPE, NUM_ROUNDS, ENABLE_DP, IID
+   - Click Build
 
 #### Optional Enhancements:
 
@@ -223,19 +221,22 @@ pytest tests/test_data_validation.py -v
 
 ### Notes
 
-- **Docker in GitHub Actions:** Requires Docker to be available (usually is)
+- **Docker in Jenkins:** Requires Docker access (configured in setup)
 - **MLflow:** Starts in background, may need adjustment
-- **Time Limits:** Workflows have time limits (6 hours for free tier)
-- **Artifacts:** Stored for 7 days (configurable)
+- **Time Limits:** No limits (your server)
+- **Artifacts:** Stored indefinitely (configurable)
+- **Disk Space:** Unlimited (your server resources)
 
 ### Phase 3 Status: ✅ COMPLETE
 
 All Phase 3 objectives achieved:
-- ✅ GitHub Actions workflows
+- ✅ Jenkins pipeline (migrated from GitHub Actions)
 - ✅ Pre-commit hooks
 - ✅ Test suite
 - ✅ CI/CD automation
 - ✅ Documentation
 
-Ready to proceed to Phase 4 (FL Model Lifecycle)!
+**Migration**: Switched from GitHub Actions to Jenkins due to disk space limitations.
+
+Ready to proceed to Phase 4 (Federated Inference)!
 

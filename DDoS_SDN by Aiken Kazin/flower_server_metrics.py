@@ -647,6 +647,21 @@ class MetricsFedAvg(FedAvg):
             # Save the model as H5 file
             self._save_model()
             
+            # Distribute model to workers for federated inference
+            try:
+                from mlops.model_distribution import SharedVolumeDistributor
+                distributor = SharedVolumeDistributor(models_dir=self.models_dir)
+                dist_result = distributor.distribute_model(
+                    model_type=self.model_type,
+                    version=f"round_{rnd}"
+                )
+                if dist_result.get("success"):
+                    logger.info(f"✅ Model {self.model_type} distributed to workers for inference")
+                else:
+                    logger.warning(f"⚠️ Model distribution failed: {dist_result.get('error')}")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not distribute model to workers: {e}")
+            
             # Register model in MLflow and end run
             if self.mlflow_enabled and MLFLOW_AVAILABLE and self.mlflow_run:
                 try:

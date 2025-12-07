@@ -13,9 +13,18 @@
 /DDoS_SDN by Aiken Kazin/img/
 /DDoS_SDN by Aiken Kazin/models/
 /DDoS_SDN by Aiken Kazin/report/
+/DDoS_SDN by Aiken Kazin/mlruns/
 /imgs/
 /paper/
 /logs/
+
+# MLflow tracking data
+mlruns/
+**/mlruns/
+
+# Jenkins data
+jenkins_home/
+**/jenkins_home/
 
 
 # Python cache and environment files (optional but recommended)

@@ -152,6 +152,9 @@ services:
       - flower-network
     volumes:
       - ./dataset_sdn.csv:/app/dataset_sdn.csv:ro
+      - ./models:/app/models:rw
+    ports:
+      - "6001:6000"  # Worker inference API
 
   # Worker 2 - MLPv2 (second worker)
   flower-worker-2:
@@ -185,6 +188,9 @@ services:
       - flower-network
     volumes:
       - ./dataset_sdn.csv:/app/dataset_sdn.csv:ro
+      - ./models:/app/models:rw
+    ports:
+      - "6002:6000"  # Worker inference API
 
   # Worker 3 - CNN1D (first worker)
   flower-worker-3:
@@ -218,6 +224,9 @@ services:
       - flower-network
     volumes:
       - ./dataset_sdn.csv:/app/dataset_sdn.csv:ro
+      - ./models:/app/models:rw
+    ports:
+      - "6003:6000"  # Worker inference API
 
   # Worker 4 - CNN1D (second worker)
   flower-worker-4:
@@ -251,6 +260,9 @@ services:
       - flower-network
     volumes:
       - ./dataset_sdn.csv:/app/dataset_sdn.csv:ro
+      - ./models:/app/models:rw
+    ports:
+      - "6004:6000"  # Worker inference API
 
   # Worker 5 - LSTM (first worker)
   flower-worker-5:
@@ -284,6 +296,9 @@ services:
       - flower-network
     volumes:
       - ./dataset_sdn.csv:/app/dataset_sdn.csv:ro
+      - ./models:/app/models:rw
+    ports:
+      - "6005:6000"  # Worker inference API
 
   # Worker 6 - LSTM (second worker)
   flower-worker-6:
@@ -317,6 +332,9 @@ services:
       - flower-network
     volumes:
       - ./dataset_sdn.csv:/app/dataset_sdn.csv:ro
+      - ./models:/app/models:rw
+    ports:
+      - "6006:6000"  # Worker inference API
 
   # Worker 7 - CNN_LSTM (first worker)
   flower-worker-7:
@@ -350,6 +368,9 @@ services:
       - flower-network
     volumes:
       - ./dataset_sdn.csv:/app/dataset_sdn.csv:ro
+      - ./models:/app/models:rw
+    ports:
+      - "6007:6000"  # Worker inference API
 
   # Worker 8 - CNN_LSTM (second worker)
   flower-worker-8:
@@ -383,6 +404,9 @@ services:
       - flower-network
     volumes:
       - ./dataset_sdn.csv:/app/dataset_sdn.csv:ro
+      - ./models:/app/models:rw
+    ports:
+      - "6008:6000"  # Worker inference API
 
   # MLflow Tracking Server - Experiment tracking and model registry
   mlflow-server:
@@ -398,6 +422,24 @@ services:
     networks:
       - flower-network
     restart: unless-stopped
+
+  # Jenkins CI/CD Server - Automated FL training pipeline
+  jenkins:
+    image: jenkins/jenkins:lts
+    container_name: jenkins
+    ports:
+      - "8090:8080"  # Jenkins web UI (8090 to avoid conflict with FL servers)
+      - "50000:50000"  # Jenkins agent port
+    volumes:
+      - ./jenkins_home:/var/jenkins_home  # Persistent Jenkins data
+      - /var/run/docker.sock:/var/run/docker.sock  # Docker socket for building images
+      - .:/var/jenkins_home/workspace/FL-Project:ro  # Read-only access to project
+    environment:
+      - JENKINS_OPTS=--httpPort=8080
+    networks:
+      - flower-network
+    restart: unless-stopped
+    user: root  # Required for Docker socket access
 
 networks:
   flower-network:

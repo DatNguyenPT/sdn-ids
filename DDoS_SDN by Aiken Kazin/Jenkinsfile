@@ -1,0 +1,313 @@
+pipeline {
+    agent any
+    
+    parameters {
+        choice(
+            name: 'MODEL_TYPE',
+            choices: ['LSTM', 'MLPv2', 'CNN1D', 'CNN_LSTM', 'all'],
+            description: 'Model type to train'
+        )
+        string(
+            name: 'NUM_ROUNDS',
+            defaultValue: '5',
+            description: 'Number of FL rounds'
+        )
+        booleanParam(
+            name: 'ENABLE_DP',
+            defaultValue: false,
+            description: 'Enable Differential Privacy'
+        )
+        booleanParam(
+            name: 'IID',
+            defaultValue: true,
+            description: 'IID distribution (true) or Non-IID (false)'
+        )
+    }
+    
+    environment {
+        PROJECT_DIR = "DDoS_SDN by Aiken Kazin"
+        FL_ENABLE_DP = "${params.ENABLE_DP}"
+        IID = "${params.IID}"
+        NUM_ROUNDS = "${params.NUM_ROUNDS}"
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                // Checkout from Git repository using credentials
+                checkout([
+                    $class: 'GitSCM',
+                    branches: [[name: '*/main']],  // or '*/master' depending on your branch
+                    extensions: [],
+                    userRemoteConfigs: [[
+                        credentialsId: 'github-pat',  // Jenkins credential ID for GitHub PAT
+                        url: 'https://github.com/DatNguyenPT/sdn-ids.git'  // Replace with your repo URL
+                    ]]
+                ])
+                // Alternative: If repo is public or using SSH, use:
+                // checkout scm
+                sh 'echo "📊 Disk space after checkout:"'
+                sh 'df -h'
+            }
+        }
+        
+        stage('Validate Dataset') {
+            steps {
+                dir("${PROJECT_DIR}") {
+                    sh '''
+                        python3 -m pip install --upgrade pip
+                        pip install pandas numpy scikit-learn
+                        python mlops/validate_data.py
+                    '''
+                }
+            }
+        }
+        
+        stage('Code Quality') {
+            steps {
+                dir("${PROJECT_DIR}") {
+                    sh '''
+                        pip install flake8 black
+                        black --check . || echo "Formatting check (non-blocking)"
+                        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics || true
+                    '''
+                }
+            }
+        }
+        
+        stage('Docker Cleanup') {
+            steps {
+                sh '''
+                    docker system prune -af --volumes || true
+                    docker builder prune -af || true
+                    echo "📊 Disk space after cleanup:"
+                    df -h
+                '''
+            }
+        }
+        
+        stage('FL Training') {
+            parallel {
+                stage('MLPv2') {
+                    when {
+                        anyOf {
+                            expression { params.MODEL_TYPE == 'MLPv2' }
+                            expression { params.MODEL_TYPE == 'all' }
+                        }
+                    }
+                    steps {
+                        script {
+                            trainModel('MLPv2')
+                        }
+                    }
+                }
+                
+                stage('LSTM') {
+                    when {
+                        anyOf {
+                            expression { params.MODEL_TYPE == 'LSTM' }
+                            expression { params.MODEL_TYPE == 'all' }
+                        }
+                    }
+                    steps {
+                        script {
+                            trainModel('LSTM')
+                        }
+                    }
+                }
+                
+                stage('CNN1D') {
+                    when {
+                        anyOf {
+                            expression { params.MODEL_TYPE == 'CNN1D' }
+                            expression { params.MODEL_TYPE == 'all' }
+                        }
+                    }
+                    steps {
+                        script {
+                            trainModel('CNN1D')
+                        }
+                    }
+                }
+                
+                stage('CNN_LSTM') {
+                    when {
+                        anyOf {
+                            expression { params.MODEL_TYPE == 'CNN_LSTM' }
+                            expression { params.MODEL_TYPE == 'all' }
+                        }
+                    }
+                    steps {
+                        script {
+                            trainModel('CNN_LSTM')
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('Model Evaluation') {
+            steps {
+                dir("${PROJECT_DIR}") {
+                    sh '''
+                        pip install -r requirements-worker.txt
+                        pip install pandas numpy scikit-learn matplotlib seaborn
+                        for model in models/*_FL.h5; do
+                            if [ -f "$model" ]; then
+                                echo "Evaluating $model..."
+                                python evaluate.py --model-name $(basename $model) || echo "Evaluation failed"
+                            fi
+                        done
+                    '''
+                }
+            }
+        }
+        
+        stage('Export MLflow Data') {
+            steps {
+                dir("${PROJECT_DIR}") {
+                    sh '''
+                        pip install mlflow pandas
+                        mkdir -p reports
+                        if [ -d "mlruns" ]; then
+                            python3 << 'EOF'
+import mlflow
+import pandas as pd
+import json
+import os
+
+mlflow.set_tracking_uri("file:./mlruns")
+try:
+    experiments = mlflow.search_experiments()
+    all_runs = []
+    for exp in experiments:
+        runs = mlflow.search_runs(experiment_ids=[exp.experiment_id])
+        if not runs.empty:
+            all_runs.append(runs)
+    if all_runs:
+        df = pd.concat(all_runs, ignore_index=True)
+        df.to_csv("reports/mlflow_runs.csv", index=False)
+        print("✅ Exported MLflow runs")
+except Exception as e:
+    print(f"⚠️ Could not export: {e}")
+EOF
+                        fi
+                    '''
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            dir("${PROJECT_DIR}") {
+                archiveArtifacts artifacts: 'models/*.h5', allowEmptyArchive: true
+                archiveArtifacts artifacts: 'reports/**', allowEmptyArchive: true
+                archiveArtifacts artifacts: 'mlruns/**', allowEmptyArchive: true
+            }
+        }
+        success {
+            echo "✅ FL Training completed successfully!"
+        }
+        failure {
+            echo "❌ FL Training failed!"
+        }
+        cleanup {
+            dir("${PROJECT_DIR}") {
+                sh 'docker compose down -v || true'
+            }
+            sh '''
+                docker system prune -af || true
+                docker builder prune -af || true
+            '''
+        }
+    }
+}
+
+def trainModel(String modelType) {
+    dir("DDoS_SDN by Aiken Kazin") {
+        def modelTypeLower = modelType.toLowerCase()
+        
+        // Map workers
+        def workers = [:]
+        switch(modelTypeLower) {
+            case 'mlpv2':
+                workers = ['flower-worker-1', 'flower-worker-2']
+                break
+            case 'cnn1d':
+                workers = ['flower-worker-3', 'flower-worker-4']
+                break
+            case 'lstm':
+                workers = ['flower-worker-5', 'flower-worker-6']
+                break
+            case 'cnn_lstm':
+                workers = ['flower-worker-7', 'flower-worker-8']
+                break
+        }
+        
+        echo "🔨 Training ${modelType}..."
+        echo "📊 Disk space before training:"
+        sh 'df -h'
+        
+        // Start dependencies
+        sh '''
+            docker compose up -d fl-dashboard mlflow-server || \
+            (docker compose build fl-dashboard mlflow-server && \
+             docker compose up -d fl-dashboard mlflow-server)
+        '''
+        sh 'sleep 10'
+        
+        // Build and start server
+        sh "docker compose build flower-server-${modelTypeLower}"
+        sh "docker compose up -d flower-server-${modelTypeLower}"
+        sh 'sleep 5'
+        
+        // Build and start workers sequentially
+        workers.each { worker ->
+            echo "🔨 Building ${worker}..."
+            sh "docker compose build ${worker}"
+            sh "docker compose up -d ${worker}"
+            sh 'docker builder prune -f || true'
+            sh 'df -h'
+            sh 'sleep 2'
+        }
+        
+        sh 'sleep 10'
+        
+        // Monitor training
+        echo "⏳ Monitoring FL training for ${modelType}..."
+        sh '''
+            timeout 3600 bash -c '
+                while true; do
+                    if docker compose logs --tail=10 flower-server-''' + modelTypeLower + ''' | grep -q "Training finished\|All.*rounds completed"; then
+                        echo "✅ Training completed!"
+                        break
+                    fi
+                    sleep 10
+                done
+            ' || echo "Training timeout or still running"
+        '''
+        
+        // Collect logs
+        sh """
+            mkdir -p logs
+            docker compose logs flower-server-${modelTypeLower} > logs/training_logs_${modelType}.txt 2>&1 || true
+            docker compose logs --tail=100 ${workers[0]} >> logs/training_logs_${modelType}.txt 2>&1 || true
+        """
+        
+        // Check model file
+        sh """
+            if [ -f "models/${modelType}_FL.h5" ]; then
+                echo "✅ Model file created: models/${modelType}_FL.h5"
+                ls -lh models/${modelType}_FL.h5
+            else
+                echo "❌ Model file not found"
+                exit 1
+            fi
+        """
+        
+        echo "📊 Disk space after training:"
+        sh 'df -h'
+    }
+}
+
