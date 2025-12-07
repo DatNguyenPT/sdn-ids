@@ -1,0 +1,14 @@
+artifact_uri: /app/mlruns/523199894252634714/cfb412703b3a4213b8365cb6edb794bd/artifacts
+end_time: 1765096487211
+entry_point_name: ''
+experiment_id: '523199894252634714'
+lifecycle_stage: active
+run_id: cfb412703b3a4213b8365cb6edb794bd
+run_name: respected-quail-858
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1765096486319
+status: 3
+tags: []
+user_id: root

@@ -151,6 +151,26 @@ class FlowerWorker(fl.client.NumPyClient):
         df = pd.read_csv("dataset_sdn.csv")
         df.columns = df.columns.str.strip().str.lower()
         
+        # Data validation (Phase 2: Data Management)
+        try:
+            from mlops.data_validation import DataValidator
+            validator = DataValidator()
+            is_valid, validation_results = validator.validate_dataset(df)
+            
+            if not is_valid:
+                logger.warning(f"[{self.worker_id}] Data validation issues detected:")
+                for check_name, check_result in validation_results.items():
+                    if isinstance(check_result, dict) and not check_result.get("passed", True):
+                        issues = check_result.get("issues", [])
+                        if issues:
+                            logger.warning(f"  {check_name}: {', '.join(issues)}")
+            else:
+                logger.info(f"[{self.worker_id}] Data validation passed")
+        except ImportError:
+            logger.debug("DataValidator not available, skipping validation")
+        except Exception as e:
+            logger.warning(f"Data validation failed: {e}. Continuing with data loading...")
+        
         # Preprocess
         df = process_col(df)
         df = normalization(df)
