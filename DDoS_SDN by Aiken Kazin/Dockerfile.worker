@@ -26,6 +26,9 @@ RUN pip install --no-cache-dir -r requirements-worker.txt
 COPY flower_worker.py .
 COPY preprocess.py .
 
+# Copy mlops modules for inference
+COPY mlops/ ./mlops/
+
 # Note: dataset_sdn.csv should be mounted as a volume or copied separately
 # For now, we'll expect it to be mounted
 

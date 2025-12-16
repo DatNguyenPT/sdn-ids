@@ -1,6 +1,19 @@
 name: Federated Learning Training Pipeline
 
 on:
+  # Trigger on push to main branch (for testing/development)
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - '.github/workflows/**'
+      - 'flower_worker.py'
+      - 'flower_server_metrics.py'
+      - 'train.py'
+      - 'mlops/**'
+      - 'dataset_sdn.csv'
+  
   # Scheduled: Weekly retraining every Sunday at 2 AM UTC
   schedule:
     - cron: '0 2 * * 0'
