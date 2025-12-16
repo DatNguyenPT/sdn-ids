@@ -528,7 +528,11 @@ class FlowerWorker(fl.client.NumPyClient):
         
         This is called by the server during federated evaluation rounds.
         """
-        logger.info(f"[{self.worker_id}] Evaluating model (Model: {self.model_type})...")
+        # Track current round from config if available
+        if "server_round" in config:
+            self.current_round = config["server_round"]
+        
+        logger.info(f"[{self.worker_id}] Evaluating model (Model: {self.model_type}, Round: {self.current_round}/{self.total_rounds})...")
         
         # Set parameters from server
         self.set_parameters(parameters)
@@ -545,18 +549,49 @@ class FlowerWorker(fl.client.NumPyClient):
         
         num_samples = len(self.X_test)
         
+        metrics_dict = {
+            "test_loss": float(loss),
+            "test_accuracy": float(accuracy),
+            "worker_id": self.worker_id,
+            "model_type": self.model_type
+        }
+        
+        # On final round, collect predictions for confusion matrix
+        # Check if this is the final round - use server_round from config if available
+        server_round = config.get("server_round", getattr(self, 'current_round', 0))
+        is_final_round = server_round >= self.total_rounds
+        
+        if is_final_round:
+            try:
+                # Get predictions
+                y_pred_proba = self.model.predict(test_data, batch_size=self.batch_size, verbose=0)
+                y_pred = np.argmax(y_pred_proba, axis=1)
+                
+                # Convert y_test back to integer labels
+                if hasattr(self, 'y_test'):
+                    y_true = self.y_test.values if isinstance(self.y_test, pd.Series) else self.y_test
+                else:
+                    y_true = np.argmax(self.y_test_cat, axis=1)
+                
+                # Add to metrics for server to collect
+                metrics_dict["y_true"] = y_true.tolist()
+                metrics_dict["y_pred"] = y_pred.tolist()
+                logger.info(f"[{self.worker_id}] ✅ Collected {len(y_true)} predictions for confusion matrix (Round: {server_round}/{self.total_rounds})")
+            except Exception as e:
+                logger.error(f"[{self.worker_id}] ❌ Failed to collect predictions for confusion matrix: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            # Debug: log why predictions aren't being collected
+            logger.debug(f"[{self.worker_id}] Not collecting predictions - server_round={server_round}, total_rounds={self.total_rounds}")
+        
         logger.info(
             f"[{self.worker_id}] Evaluation complete (Model: {self.model_type}) - "
             f"Loss: {loss:.4f}, Accuracy: {accuracy:.4f}, "
             f"Samples: {num_samples}"
         )
         
-        return float(loss), num_samples, {
-            "test_loss": float(loss),
-            "test_accuracy": float(accuracy),
-            "worker_id": self.worker_id,
-            "model_type": self.model_type
-        }
+        return float(loss), num_samples, metrics_dict
 
 
 def main():

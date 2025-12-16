@@ -17,11 +17,15 @@ import os
 import json
 import time
 import argparse
+import logging
 from datetime import datetime
 from flask import Flask, render_template_string, jsonify, request
 from flask_cors import CORS
 import threading
 from collections import defaultdict
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)
@@ -41,6 +45,10 @@ metrics = defaultdict(lambda: {
     "aggregation": {
         "accuracies": [],
         "losses": []
+    },
+    "confusion_matrix": {
+        "y_true": [],
+        "y_pred": []
     },
     "params_sent_per_round": [],
     "params_received_per_round": [],
@@ -428,6 +436,13 @@ DASHBOARD_HTML = """
                             <div class="chart-title">Parameters Sent/Received Per Round</div>
                             <div id="chart-${modelType}-params"></div>
                         </div>
+                        
+                        ${modelData.confusion_matrix && modelData.confusion_matrix.y_true && modelData.confusion_matrix.y_true.length > 0 ? `
+                        <div class="chart-container">
+                            <div class="chart-title">Confusion Matrix</div>
+                            <div id="chart-${modelType}-confusion"></div>
+                        </div>
+                        ` : '<div class="chart-container"><div class="chart-title">Confusion Matrix</div><p style="color: #999; padding: 20px; text-align: center;">Confusion matrix will appear after training completes</p></div>'}
                     </div>
                 `;
             });
@@ -565,6 +580,62 @@ DASHBOARD_HTML = """
                     hovermode: 'x unified',
                     height: 250
                 });
+                
+                // Confusion Matrix chart (if data available)
+                if (modelData.confusion_matrix && modelData.confusion_matrix.y_true && modelData.confusion_matrix.y_true.length > 0) {
+                    const yTrue = modelData.confusion_matrix.y_true;
+                    const yPred = modelData.confusion_matrix.y_pred;
+                    
+                    // Compute confusion matrix
+                    const classes = [...new Set([...yTrue, ...yPred])].sort();
+                    const nClasses = classes.length;
+                    const cm = Array(nClasses).fill(0).map(() => Array(nClasses).fill(0));
+                    
+                    for (let i = 0; i < yTrue.length; i++) {
+                        const trueIdx = classes.indexOf(yTrue[i]);
+                        const predIdx = classes.indexOf(yPred[i]);
+                        if (trueIdx >= 0 && predIdx >= 0) {
+                            cm[trueIdx][predIdx]++;
+                        }
+                    }
+                    
+                    // Calculate accuracy
+                    let correct = 0;
+                    for (let i = 0; i < nClasses; i++) {
+                        correct += cm[i][i];
+                    }
+                    const accuracy = (correct / yTrue.length * 100).toFixed(2);
+                    
+                    // Prepare data for heatmap
+                    const z = cm;
+                    const x = classes.map(c => `Predicted ${c}`);
+                    const y = classes.map(c => `True ${c}`);
+                    const text = cm.map((row, i) => 
+                        row.map((val, j) => `${val}<br>(${((val / yTrue.length) * 100).toFixed(1)}%)`)
+                    );
+                    
+                    Plotly.newPlot(`chart-${modelType}-confusion`, [{
+                        z: z,
+                        x: x,
+                        y: y,
+                        text: text,
+                        texttemplate: '%{text}',
+                        textfont: { size: 14, color: 'white' },
+                        type: 'heatmap',
+                        colorscale: [[0, '#e3f2fd'], [0.5, '#64b5f6'], [1, '#1976d2']],
+                        showscale: true,
+                        colorbar: { title: 'Count' }
+                    }], {
+                        title: {
+                            text: `Confusion Matrix - Accuracy: ${accuracy}%`,
+                            font: { size: 16, color: '#333' }
+                        },
+                        xaxis: { title: 'Predicted Label', side: 'bottom' },
+                        yaxis: { title: 'True Label', autorange: 'reversed' },
+                        height: 400,
+                        margin: { l: 80, r: 50, t: 80, b: 80 }
+                    });
+                }
             });
         }
 
@@ -615,6 +686,7 @@ def get_metrics():
             "params_received_per_round": model_metrics.get("params_received_per_round", []),
             "model_params_count": model_metrics.get("model_params_count", 0),
             "iid": model_metrics.get("iid", True),
+            "confusion_matrix": model_metrics.get("confusion_matrix", {"y_true": [], "y_pred": []}),
             "dp": {
                 "enabled": model_metrics.get("dp", {}).get("enabled", False),
                 "epsilon_per_round": model_metrics.get("dp", {}).get("epsilon_per_round", []),
@@ -656,6 +728,10 @@ def update_metrics():
             "aggregation": {
                 "accuracies": [],
                 "losses": []
+            },
+            "confusion_matrix": {
+                "y_true": [],
+                "y_pred": []
             },
             "params_sent_per_round": [],
             "params_received_per_round": [],
@@ -706,6 +782,16 @@ def update_metrics():
         if round_num in model_metrics["rounds"]:
             idx = model_metrics["rounds"].index(round_num)
             model_metrics["aggregation"]["losses"][idx] = float(data["loss"])
+    
+    # Update confusion matrix data (only on final round)
+    if "confusion_matrix" in data:
+        cm_data = data["confusion_matrix"]
+        if "y_true" in cm_data and "y_pred" in cm_data:
+            model_metrics["confusion_matrix"]["y_true"] = cm_data["y_true"]
+            model_metrics["confusion_matrix"]["y_pred"] = cm_data["y_pred"]
+            logger.info(f"✅ Updated confusion matrix for {model_type}: {len(cm_data['y_true'])} samples")
+        else:
+            logger.warning(f"⚠️ Confusion matrix data incomplete for {model_type}: y_true={cm_data.get('y_true', 'missing')}, y_pred={cm_data.get('y_pred', 'missing')}")
     
     # Update bytes sent
     if "bytes_sent" in data:

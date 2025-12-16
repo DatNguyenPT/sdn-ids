@@ -25,6 +25,7 @@ services:
       - mlflow-server
     volumes:
       - ./models:/app/models
+      - ./visualizations:/app/visualizations
 
   # Flower Server for CNN1D - Coordinates federated learning for CNN1D model
   flower-server-cnn1d:
@@ -52,6 +53,7 @@ services:
       - mlflow-server
     volumes:
       - ./models:/app/models
+      - ./visualizations:/app/visualizations
 
   # Flower Server for LSTM - Coordinates federated learning for LSTM model
   flower-server-lstm:
@@ -79,6 +81,7 @@ services:
       - mlflow-server
     volumes:
       - ./models:/app/models
+      - ./visualizations:/app/visualizations
 
   # Flower Server for CNN_LSTM - Coordinates federated learning for CNN_LSTM model
   flower-server-cnn_lstm:
@@ -106,6 +109,7 @@ services:
       - mlflow-server
     volumes:
       - ./models:/app/models
+      - ./visualizations:/app/visualizations
 
   # FL Dashboard - Visualization dashboard
   fl-dashboard:

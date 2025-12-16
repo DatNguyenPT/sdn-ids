@@ -1,0 +1,329 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{geometry}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{graphicx}
+
+\geometry{margin=1in}
+
+\title{Phương pháp huấn luyện Federated Learning cho phát hiện DDoS\\Mô tả chi tiết quy trình và kiến trúc MLP, CNN1D, LSTM, CNN\_LSTM}
+\author{}
+\date{\today}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red},
+    commentstyle=\color{green!50!black},
+    breaklines=true,
+    frame=single
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Tài liệu này trình bày chi tiết một phương pháp huấn luyện mô hình theo Federated Learning (FL) cho bài toán phát hiện tấn công DDoS trong môi trường mạng/SDN. Trọng tâm là quy trình huấn luyện theo vòng (round-based training), cơ chế tổng hợp tham số theo FedAvg, các lựa chọn tiền xử lý và đánh giá, cùng mô tả đầy đủ cách hoạt động của bốn kiến trúc mô hình thường dùng: MLP, CNN1D, LSTM và mô hình lai CNN\_LSTM. Văn bản được viết theo hướng ``research paper'' (không phụ thuộc triển khai mã nguồn cụ thể), có kèm các công thức và phân tích trực giác cho trường hợp IID và Non-IID.
+\end{abstract}
+
+\section{Giới thiệu}
+
+Federated Learning (FL) là một hướng tiếp cận huấn luyện mô hình phân tán, trong đó dữ liệu được giữ tại các nút cục bộ (client/worker) và chỉ trao đổi tham số/cập nhật mô hình với máy chủ điều phối (server). FL đặc biệt phù hợp khi dữ liệu nhạy cảm hoặc khó tập trung (ví dụ: log lưu lượng mạng ở các thiết bị/điểm mạng khác nhau). Trong bài toán phát hiện DDoS, dữ liệu có thể phân tán theo nhiều miền mạng, nhiều switch/host, và thường có phân phối không đồng nhất (Non-IID), dẫn tới thách thức về hội tụ và ổn định khi tổng hợp.
+
+Về phía mô hình học, bài toán phát hiện DDoS có thể xem như phân loại nhị phân hoặc đa lớp trên vector đặc trưng thống kê lưu lượng (packet/byte count, rate, duration, v.v.). Các kiến trúc khác nhau mang các thiên kiến (inductive bias) khác nhau: MLP phù hợp dữ liệu dạng vector tabular; CNN1D khai thác cấu trúc cục bộ theo ``chiều'' đặc trưng; LSTM nắm bắt phụ thuộc tuần tự (nếu xem vector như chuỗi đặc trưng hoặc khi dữ liệu có thứ tự theo thời gian); CNN\_LSTM kết hợp trích chọn đặc trưng cục bộ của CNN và mô hình hoá phụ thuộc của LSTM.
+
+\section{Bài toán và ký hiệu}
+
+Giả sử có $K$ client. Client $k$ sở hữu tập dữ liệu cục bộ $\mathcal{D}_k = \{(x_{k,i}, y_{k,i})\}_{i=1}^{n_k}$, trong đó $x_{k,i}\in\mathbb{R}^d$ là vector đặc trưng và $y_{k,i}$ là nhãn (ví dụ nhị phân $y\in\{0,1\}$).
+
+Mục tiêu tối ưu hoá toàn cục trong FL thường được viết:
+\[
+\min_{w} F(w) \quad \text{với} \quad
+F(w)=\sum_{k=1}^{K}\frac{n_k}{n}\,F_k(w), \qquad n=\sum_{k=1}^{K}n_k,
+\]
+và mục tiêu cục bộ:
+\[
+F_k(w)=\frac{1}{n_k}\sum_{i=1}^{n_k}\ell\!\left(w; x_{k,i}, y_{k,i}\right),
+\]
+trong đó $w$ là tham số mô hình, $\ell(\cdot)$ là hàm mất mát.
+
+\subsection{Hàm mất mát phân loại}
+
+\textbf{Nhị phân (Binary Cross-Entropy):}
+\[
+\ell_{\text{BCE}}(w;x,y) = -\left[y\log p_w(x) + (1-y)\log(1-p_w(x))\right],
+\]
+với $p_w(x)=\sigma(z)$ và $z=f_w(x)$ là logit, $\sigma$ là sigmoid.
+
+\textbf{Đa lớp (Categorical Cross-Entropy):}
+\[
+\ell_{\text{CE}}(w;x,y) = -\sum_{c=1}^{C}\mathbf{1}[y=c]\log p_w(c\mid x),
+\]
+với $p_w(\cdot\mid x)$ là softmax trên $C$ lớp.
+
+\section{Quy trình huấn luyện Federated Learning theo vòng}
+
+\subsection{Tổng quan pipeline}
+
+Một pipeline FL điển hình cho phát hiện DDoS gồm các giai đoạn:
+\begin{enumerate}
+    \item \textbf{Tiền xử lý dữ liệu} tại mỗi client: làm sạch, mã hoá, chuẩn hoá/scale, tạo đặc trưng, chia train/test cục bộ.
+    \item \textbf{Khởi tạo mô hình toàn cục} trên server (tham số $w_0$).
+    \item \textbf{Huấn luyện theo vòng (round)}: server phát $w_t$, client huấn luyện cục bộ tạo $w_{t+1}^{(k)}$, server tổng hợp thành $w_{t+1}$.
+    \item \textbf{Đánh giá} theo vòng hoặc cuối quá trình: đo accuracy/loss, confusion matrix, các chỉ số precision/recall/F1 (đặc biệt quan trọng khi lệch lớp).
+    \item \textbf{Dừng/triển khai}: sau $T$ vòng hoặc theo tiêu chí hội tụ/early stopping.
+\end{enumerate}
+
+\subsection{FedAvg: tổng hợp tham số có trọng số}
+
+Ở vòng $t$, server chọn tập client tham gia $S_t$ (có thể là toàn bộ hoặc một phần). Mỗi client $k\in S_t$ bắt đầu từ $w_t$ và sau huấn luyện cục bộ trả về $w_{t+1}^{(k)}$. Server cập nhật:
+\[
+w_{t+1}=\sum_{k\in S_t}\frac{n_k}{\sum_{j\in S_t}n_j}\,w_{t+1}^{(k)}.
+\]
+
+Góc nhìn theo \textbf{delta update}:
+\[
+\Delta_t^{(k)} = w_{t+1}^{(k)} - w_t,
+\quad
+w_{t+1} = w_t + \sum_{k\in S_t}\frac{n_k}{\sum_{j\in S_t}n_j}\,\Delta_t^{(k)}.
+\]
+
+\subsection{Huấn luyện cục bộ: Local SGD / Local Optimizer}
+
+Client $k$ khởi tạo:
+\[
+w_{t,0}^{(k)} \leftarrow w_t.
+\]
+Sau đó chạy $E$ epoch cục bộ với mini-batch $\mathcal{B}_{k,s}$:
+\[
+w_{t,s+1}^{(k)} = w_{t,s}^{(k)} - \eta \nabla \ell\left(w_{t,s}^{(k)};\mathcal{B}_{k,s}\right).
+\]
+Trong thực tế, optimizer có thể là SGD, Adam, RMSprop, v.v. Khi dùng Adam, cập nhật mang dạng:
+\[
+m_s = \beta_1 m_{s-1} + (1-\beta_1)g_s,\qquad
+v_s = \beta_2 v_{s-1} + (1-\beta_2)g_s^2,
+\]
+\[
+\hat m_s = \frac{m_s}{1-\beta_1^s},\qquad
+\hat v_s = \frac{v_s}{1-\beta_2^s},\qquad
+w_{s+1}=w_s-\eta\frac{\hat m_s}{\sqrt{\hat v_s}+\epsilon},
+\]
+trong đó $g_s=\nabla \ell(w_s;\mathcal{B}_{k,s})$.
+
+\subsection{IID vs Non-IID và hiện tượng client drift}
+
+\textbf{IID:} nếu các $\mathcal{D}_k$ là IID từ cùng phân phối, gradient cục bộ xấp xỉ gradient toàn cục:
+\[
+\mathbb{E}\left[\nabla F_k(w)\right]\approx \nabla F(w),
+\]
+do đó FedAvg thường ổn định và hội tụ nhanh.
+
+\textbf{Non-IID:} nếu phân phối giữa client khác nhau (ví dụ lệch lớp, lệch miền dữ liệu), ta có:
+\[
+\nabla F_k(w) \not\approx \nabla F(w),
+\]
+và huấn luyện cục bộ nhiều epoch có thể kéo mô hình theo cực tiểu cục bộ mỗi client, gây \textbf{client drift}. Điều này làm cập nhật trung bình trở nên kém hiệu quả, tăng dao động và giảm chất lượng mô hình toàn cục.
+
+\section{Tiền xử lý dữ liệu (khuyến nghị cho dữ liệu lưu lượng mạng)}
+
+Với dữ liệu lưu lượng mạng/SDN dạng tabular, các bước phổ biến:
+\begin{itemize}
+    \item \textbf{Làm sạch}: xử lý thiếu giá trị (median/mode), loại bỏ giá trị bất hợp lệ (âm), loại outlier (capping theo quantile).
+    \item \textbf{Mã hoá categorical}: protocol, type, flags, v.v. (label encoding/one-hot).
+    \item \textbf{Chuẩn hoá/scale}: Min-Max hoặc z-score để ổn định gradient.
+    \item \textbf{Biến đổi giảm lệch}: log-transform (ví dụ $\log(1+x)$) cho các đặc trưng lệch phải.
+    \item \textbf{Tạo đặc trưng}: tỉ lệ rx/tx, byte per packet, packet rate, byte rate, v.v.
+    \item \textbf{Mất cân bằng lớp}: dùng class weight, hoặc resampling (SMOTE/undersampling) \emph{trên train} nếu phù hợp bối cảnh nghiên cứu.
+\end{itemize}
+
+Trong bối cảnh FL, cần lưu ý: các bước tiền xử lý nên \textbf{nhất quán} giữa client (cùng cách scale/encode) để tổng hợp mô hình có ý nghĩa. Có hai cách:
+\begin{enumerate}
+    \item \textbf{Local preprocessing độc lập}: mỗi client fit scaler/encoder của riêng mình (dễ triển khai nhưng có thể tạo lệch phân phối đặc trưng).
+    \item \textbf{Global preprocessing thống nhất}: dùng thống kê chung (global scaler/encoder) hoặc kỹ thuật federated statistics để đồng bộ.
+\end{enumerate}
+
+\section{Kiến trúc mô hình: mô tả chi tiết}
+
+\subsection{MLP (Multi-Layer Perceptron) cho dữ liệu tabular}
+
+\subsubsection{Cấu trúc và lan truyền tiến}
+MLP là mạng fully-connected nhiều lớp. Với input $x\in\mathbb{R}^d$:
+\[
+h^{(1)} = \phi\!\left(W^{(1)}x + b^{(1)}\right),
+\quad
+h^{(2)} = \phi\!\left(W^{(2)}h^{(1)} + b^{(2)}\right),
+\ \dots
+\]
+Output:
+\[
+z = W^{(L)}h^{(L-1)} + b^{(L)},
+\quad
+\hat y = 
+\begin{cases}
+\sigma(z) & \text{nhị phân}\\
+\text{softmax}(z) & \text{đa lớp}
+\end{cases}
+\]
+trong đó $\phi(\cdot)$ thường là ReLU, GELU, hoặc tanh.
+
+\subsubsection{Regularization và ổn định}
+Với dữ liệu mạng thường nhiễu, MLP dễ overfit. Các kỹ thuật hay dùng:
+\begin{itemize}
+    \item \textbf{Dropout}: ngẫu nhiên ``tắt'' một phần neuron, giảm đồng thích nghi.
+    \item \textbf{Batch Normalization}: chuẩn hoá theo batch giúp ổn định và tăng tốc hội tụ.
+    \item \textbf{Weight decay (L2)}: phạt $\lambda\|w\|_2^2$ để hạn chế trọng số lớn.
+\end{itemize}
+
+\subsubsection{Ưu/nhược điểm}
+\begin{itemize}
+    \item \textbf{Ưu}: đơn giản, hiệu quả cho tabular; chi phí tính toán thấp; dễ triển khai FL.
+    \item \textbf{Nhược}: thiếu thiên kiến cấu trúc; có thể kém bền vững khi Non-IID mạnh; cần regularization tốt.
+\end{itemize}
+
+\subsection{CNN1D cho chuỗi đặc trưng (feature sequence)}
+
+\subsubsection{Động cơ dùng CNN1D}
+Ngay cả khi dữ liệu không phải chuỗi thời gian, ta có thể xem vector đặc trưng $x\in\mathbb{R}^d$ như một chuỗi 1D độ dài $d$ (mỗi ``timestep'' là một feature). CNN1D sẽ học các ``pattern cục bộ'' trên các nhóm feature lân cận.
+
+\subsubsection{Phép chập 1D}
+Với input $x$ (đã thêm chiều kênh nếu cần), một kernel $w\in\mathbb{R}^{k}$ kích thước $k$ tạo ra:
+\[
+(x * w)_t = \sum_{i=0}^{k-1} w_i\,x_{t+i}.
+\]
+Với nhiều kernel/filters, ta thu được nhiều map đặc trưng. Sau đó áp dụng activation (ReLU) và pooling.
+
+\subsubsection{Pooling và trích chọn}
+\textbf{MaxPooling} giảm chiều, tăng tính bất biến cục bộ:
+\[
+\text{pool}(u)_t = \max\{u_{t}, u_{t+1}, \dots, u_{t+p-1}\}.
+\]
+Sau nhiều block Conv+Pool, ta \textbf{flatten} và đưa qua các lớp fully-connected để phân loại.
+
+\subsubsection{Ưu/nhược điểm}
+\begin{itemize}
+    \item \textbf{Ưu}: học đặc trưng cục bộ, thường hội tụ tốt; phù hợp khi có cấu trúc nhóm feature.
+    \item \textbf{Nhược}: nếu thứ tự feature không mang ý nghĩa, CNN1D có thể học pattern kém ổn định; vẫn có thể nhạy với Non-IID.
+\end{itemize}
+
+\subsection{LSTM cho phụ thuộc tuần tự}
+
+\subsubsection{Tổng quan}
+LSTM (Long Short-Term Memory) là một dạng RNN giải quyết vấn đề vanishing gradient bằng cơ chế cổng (gates) và trạng thái ô nhớ (cell state). Khi biểu diễn input như chuỗi $x_1, x_2, \dots, x_T$ (có thể là chuỗi thời gian hoặc chuỗi feature), LSTM cập nhật:
+
+\subsubsection{Phương trình LSTM}
+Với hidden state $h_{t-1}$ và cell state $c_{t-1}$:
+\[
+f_t = \sigma(W_f x_t + U_f h_{t-1} + b_f) \quad \text{(forget gate)}
+\]
+\[
+i_t = \sigma(W_i x_t + U_i h_{t-1} + b_i) \quad \text{(input gate)}
+\]
+\[
+\tilde c_t = \tanh(W_c x_t + U_c h_{t-1} + b_c) \quad \text{(candidate)}
+\]
+\[
+c_t = f_t \odot c_{t-1} + i_t \odot \tilde c_t
+\]
+\[
+o_t = \sigma(W_o x_t + U_o h_{t-1} + b_o) \quad \text{(output gate)}
+\]
+\[
+h_t = o_t \odot \tanh(c_t).
+\]
+Kết quả cuối có thể là $h_T$ (many-to-one) đưa vào classifier.
+
+\subsubsection{Ý nghĩa trực giác}
+\begin{itemize}
+    \item $f_t$ quyết định ``quên/giữ'' thông tin cũ trong $c_{t-1}$.
+    \item $i_t$ quyết định lượng thông tin mới đưa vào.
+    \item $o_t$ quyết định lượng thông tin xuất ra hidden state.
+\end{itemize}
+Nhờ vậy, LSTM có thể nắm bắt phụ thuộc dài hơn so với RNN thường.
+
+\subsubsection{Ưu/nhược điểm}
+\begin{itemize}
+    \item \textbf{Ưu}: mô hình hoá phụ thuộc dài; thường bền hơn trong một số Non-IID nếu có ``pattern tuần tự'' rõ.
+    \item \textbf{Nhược}: chi phí tính toán cao hơn; nhạy với thiết kế chuỗi (cách sắp thứ tự).
+\end{itemize}
+
+\subsection{CNN\_LSTM (mô hình lai)}
+
+\subsubsection{Động cơ kết hợp}
+CNN\_LSTM kết hợp:
+\begin{itemize}
+    \item \textbf{CNN} để trích chọn đặc trưng cục bộ (local patterns) và giảm nhiễu.
+    \item \textbf{LSTM} để mô hình hoá phụ thuộc theo ``chuỗi'' sau khi đã trích chọn.
+\end{itemize}
+
+\subsubsection{Pipeline kiến trúc điển hình}
+Một cấu hình phổ biến:
+\[
+x \rightarrow \text{Conv1D} \rightarrow \text{Pooling} \rightarrow \text{(sequence features)} \rightarrow \text{LSTM} \rightarrow \text{Dense} \rightarrow \hat y.
+\]
+CNN đóng vai trò như bộ trích chọn đặc trưng, tạo ra chuỗi vector đặc trưng theo vị trí; LSTM tổng hợp thông tin theo trật tự để đưa ra quyết định.
+
+\subsubsection{Ưu/nhược điểm}
+\begin{itemize}
+    \item \textbf{Ưu}: thường ổn định hơn vì CNN giảm nhiễu và LSTM nắm phụ thuộc; có thể tăng độ bền trước lệch phân phối.
+    \item \textbf{Nhược}: phức tạp hơn, nhiều tham số hơn, chi phí giao tiếp trong FL tăng.
+\end{itemize}
+
+\section{Thiết lập huấn luyện và đánh giá (khuyến nghị)}
+
+\subsection{Thiết lập huấn luyện cục bộ}
+Các lựa chọn thường gặp cho mỗi client:
+\begin{itemize}
+    \item Optimizer: Adam (ổn định), hoặc SGD+momentum (đơn giản, dễ phân tích).
+    \item Learning rate: chọn theo grid hoặc scheduler; có thể giảm theo vòng.
+    \item Epoch cục bộ $E$: cân bằng giữa chi phí giao tiếp và nguy cơ client drift.
+    \item Batch size $B$: 32/64/128 tuỳ tài nguyên.
+    \item Regularization: dropout, weight decay, early stopping cục bộ (thận trọng trong FL).
+\end{itemize}
+
+\subsection{Đánh giá và thước đo}
+Trong bài toán DDoS, accuracy có thể gây hiểu nhầm khi lệch lớp. Nên báo cáo:
+\begin{itemize}
+    \item Confusion matrix: TP, FP, TN, FN.
+    \item Precision, Recall, F1-score (đặc biệt cho lớp tấn công).
+    \item ROC-AUC/PR-AUC nếu cần phân tích ngưỡng.
+\end{itemize}
+
+Ví dụ:
+\[
+\text{Precision}=\frac{TP}{TP+FP},\quad
+\text{Recall}=\frac{TP}{TP+FN},\quad
+F1=\frac{2\cdot \text{Precision}\cdot \text{Recall}}{\text{Precision}+\text{Recall}}.
+\]
+
+\section{Bàn luận: ảnh hưởng kiến trúc trong FL}
+
+\subsection{Tại sao kiến trúc khác nhau có độ bền Non-IID khác nhau?}
+\begin{itemize}
+    \item \textbf{Dung lượng mô hình (capacity)}: mô hình lớn dễ ``fit'' lệch cục bộ hơn, nhưng cũng có thể học đặc trưng phong phú hơn.
+    \item \textbf{Thiên kiến kiến trúc}: CNN/LSTM có inductive bias giúp trích chọn/ghi nhớ pattern, đôi khi ổn định hơn MLP.
+    \item \textbf{Độ nhạy với scale đặc trưng}: MLP nhạy với preprocessing; CNN/LSTM có thể chịu nhiễu tốt hơn khi có normalization tốt.
+    \item \textbf{Độ lớn cập nhật}: local optimizer + $E$ quyết định delta update; mô hình khác nhau có thể tạo delta khác nhau về hướng/độ lớn.
+\end{itemize}
+
+\subsection{Gợi ý thiết kế thí nghiệm}
+Để so sánh công bằng các kiến trúc trong FL, nên:
+\begin{itemize}
+    \item Giữ cố định: số vòng $T$, số client $K$, tỷ lệ tham gia, $E$, $B$, và pipeline tiền xử lý.
+    \item Chạy cả IID và Non-IID (class-skew, quantity-skew, feature-skew).
+    \item Báo cáo metric theo vòng và cuối cùng; kèm thống kê ổn định (variance theo vòng).
+    \item Phân tích trade-off: độ chính xác vs chi phí giao tiếp (bytes/round).
+\end{itemize}
+
+\section{Kết luận}
+
+Tài liệu đã mô tả một phương pháp huấn luyện FL theo vòng cho phát hiện DDoS và phân tích chi tiết cách hoạt động của bốn kiến trúc: MLP, CNN1D, LSTM và CNN\_LSTM. Trọng tâm của FL là tối ưu hoá phân tán với tổng hợp tham số (FedAvg) và thách thức lớn nhất thường đến từ phân phối Non-IID và hiện tượng client drift. Về mô hình, MLP là baseline mạnh cho tabular, CNN1D khai thác cấu trúc cục bộ theo feature, LSTM mô hình hoá phụ thuộc tuần tự, và CNN\_LSTM kết hợp cả hai để tăng khả năng trích chọn và tổng hợp đặc trưng. Các lựa chọn huấn luyện (optimizer, learning rate, số epoch cục bộ) và chiến lược đánh giá (precision/recall/F1) là yếu tố quyết định chất lượng và khả năng ứng dụng thực tế.
+
+\end{document}
+
+

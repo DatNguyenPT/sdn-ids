@@ -1,0 +1,252 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{geometry}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{graphicx}
+
+\geometry{margin=1in}
+
+\title{FedAvg (Federated Averaging): Giải thích chi tiết kèm công thức\\Hệ thống Federated Learning phát hiện DDoS}
+\author{}
+\date{\today}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red},
+    commentstyle=\color{green!50!black},
+    breaklines=true,
+    frame=single
+}
+
+\begin{document}
+
+\maketitle
+
+\section{Tổng quan}
+
+\textbf{Federated Averaging (FedAvg)} là thuật toán tối ưu hoá kinh điển được sử dụng trong Federated Learning (FL).
+Thuật toán này huấn luyện một \textbf{mô hình toàn cục (global model)} trên nhiều client/worker mà không cần chuyển dữ liệu thô về server.
+Server điều phối quá trình huấn luyện theo \textbf{vòng (round)}. Ở mỗi vòng:
+\begin{enumerate}
+    \item Server phát các tham số toàn cục hiện tại tới các client được chọn.
+    \item Mỗi client thực hiện \textbf{huấn luyện cục bộ (local training)} (thường dùng SGD/Adam trên dữ liệu riêng).
+    \item Client gửi tham số đã cập nhật về server.
+    \item Server tổng hợp các cập nhật bằng \textbf{trung bình có trọng số}.
+\end{enumerate}
+
+Trong repo của bạn, Flower sử dụng strategy \texttt{FedAvg} (xem \texttt{flower\_server.py}), và server trong \texttt{flower\_server\_metrics.py} kế thừa nó thành \texttt{MetricsFedAvg} để theo dõi metric cho dashboard/MLflow.
+
+\section{Ký hiệu}
+
+\begin{itemize}
+    \item $K$: tổng số client/worker.
+    \item $k \in \{1,\dots,K\}$: chỉ số client.
+    \item $n_k$: số mẫu huấn luyện trên client $k$.
+    \item $n = \sum_{k=1}^{K} n_k$: tổng số mẫu huấn luyện trên tất cả client.
+    \item $w \in \mathbb{R}^d$: tham số mô hình (trọng số).
+    \item $t \in \{0,1,2,\dots\}$: chỉ số vòng FL.
+    \item $S_t \subseteq \{1,\dots,K\}$: tập client tham gia ở vòng $t$ (tham gia một phần).
+    \item $\ell(w; x, y)$: hàm mất mát cho từng mẫu (ví dụ: cross-entropy).
+    \item $\eta$: learning rate cục bộ.
+    \item $E$: số epoch huấn luyện cục bộ mỗi vòng.
+    \item $B$: kích thước mini-batch cục bộ.
+\end{itemize}
+
+\section{Mục tiêu tối ưu}
+
+FedAvg hướng tới việc tối thiểu hoá \textbf{rủi ro thực nghiệm toàn cục} (có trọng số theo kích thước dữ liệu từng client):
+\[
+\min_{w \in \mathbb{R}^d} F(w) \quad \text{where} \quad
+F(w) = \sum_{k=1}^{K} \frac{n_k}{n}\,F_k(w).
+\]
+
+Mỗi client có một \textbf{hàm mục tiêu cục bộ}:
+\[
+F_k(w) = \frac{1}{n_k}\sum_{i=1}^{n_k} \ell\bigl(w; x_{k,i}, y_{k,i}\bigr).
+\]
+
+\textbf{Điểm quan trọng:} server không bao giờ nhìn thấy $(x_{k,i}, y_{k,i})$; server chỉ nhận cập nhật tham số mô hình.
+
+\section{Thuật toán FedAvg (dạng toán học)}
+
+\subsection{Cập nhật phía server (trung bình có trọng số)}
+
+Ở vòng $t$, server giữ trọng số toàn cục $w_t$ và chọn tập client tham gia $S_t$.
+Sau huấn luyện cục bộ, mỗi client gửi về mô hình đã cập nhật $w_{t+1}^{(k)}$.
+Quy tắc tổng hợp FedAvg là:
+\[
+w_{t+1} = \sum_{k \in S_t} \frac{n_k}{\sum_{j \in S_t} n_j}\, w_{t+1}^{(k)}.
+\]
+
+Đây là \textbf{trung bình có trọng số theo số mẫu}. Client có nhiều dữ liệu sẽ ảnh hưởng tới mô hình toàn cục nhiều hơn.
+
+\subsection{Huấn luyện cục bộ phía client (Local SGD / local optimizer)}
+
+Mỗi client tham gia sẽ khởi tạo mô hình cục bộ bằng mô hình từ server:
+\[
+w_{t,0}^{(k)} \leftarrow w_t.
+\]
+
+Sau đó client huấn luyện $E$ epoch cục bộ. Với mini-batch ở bước cục bộ $s$:
+\[
+w_{t,s+1}^{(k)} = w_{t,s}^{(k)} - \eta \,\nabla \ell\left(w_{t,s}^{(k)}; \mathcal{B}_{k,s}\right),
+\]
+trong đó $\mathcal{B}_{k,s}$ là một mini-batch lấy mẫu từ dữ liệu của client $k$.
+
+Sau khi hoàn tất huấn luyện cục bộ, client $k$ trả về:
+\[
+w_{t+1}^{(k)} \leftarrow w_{t,S_k}^{(k)},
+\]
+trong đó $S_k$ là tổng số bước cập nhật cục bộ trên client $k$.
+
+\subsection{Góc nhìn khác: trung bình hoá cập nhật (Delta)}
+
+Đôi khi, việc biểu diễn FedAvg theo độ lệch tham số (delta) sẽ tiện hơn:
+\[
+\Delta_t^{(k)} = w_{t+1}^{(k)} - w_t.
+\]
+Khi đó, cập nhật tổng hợp là:
+\[
+w_{t+1} = w_t + \sum_{k \in S_t} \frac{n_k}{\sum_{j \in S_t} n_j}\,\Delta_t^{(k)}.
+\]
+
+\section{Giả mã (dễ đọc)}
+
+\begin{lstlisting}[language={},caption={Giả mã FedAvg (server + clients)}]
+Server initializes global model weights w0
+for round t = 0, 1, 2, ..., T-1 do:
+    St <- sample_clients(K, fraction_fit)   # participating clients
+    broadcast wt to all k in St
+
+    # Local training happens in parallel on clients
+    for each client k in St (in parallel) do:
+        w <- wt
+        for epoch e = 1..E do:
+            for minibatch B in client_data(k) do:
+                w <- w - eta * grad(loss(w; B))
+        return wk <- w, and nk (# local samples)
+
+    # Server aggregation (weighted average)
+    wt+1 <- sum_{k in St} (nk / sum_{j in St} nj) * wk
+end for
+\end{lstlisting}
+
+\section{Vì sao FedAvg hoạt động (trực giác)}
+
+\subsection{Trường hợp IID (lý tưởng)}
+Nếu dữ liệu trên mỗi client là IID từ cùng một phân phối, thì gradient cục bộ là ước lượng không chệch của gradient toàn cục:
+\[
+\mathbb{E}[\nabla F_k(w)] \approx \nabla F(w).
+\]
+Trong chế độ này, FedAvg xấp xỉ rất gần với mini-batch SGD tập trung, và hội tụ thường nhanh và ổn định.
+
+\subsection{Trường hợp Non-IID (trôi client / client drift)}
+Với dữ liệu Non-IID, gradient giữa các client có thể lệch hướng nhau:
+\[
+\nabla F_k(w) \not\approx \nabla F(w).
+\]
+Huấn luyện cục bộ nhiều epoch $E$ có thể gây \textbf{client drift} (mô hình cục bộ bị kéo về cực tiểu địa phương), khiến phép trung bình kém hiệu quả và đôi khi không ổn định.
+
+Đây là lý do vì sao chia dữ liệu Non-IID (ví dụ chia lệch lớp trong \texttt{flower\_worker.py}) có thể làm giảm độ chính xác hoặc làm chậm hội tụ.
+
+\section{Siêu tham số quan trọng và ảnh hưởng}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Tham số} & \textbf{Ý nghĩa} & \textbf{Ảnh hưởng thường gặp} \\
+\midrule
+$T$ & số vòng FL & Nhiều vòng $\rightarrow$ hội tụ tốt hơn, tốn giao tiếp hơn \\
+$E$ & số epoch cục bộ mỗi vòng & $E$ lớn giảm giao tiếp nhưng tăng drift (Non-IID) \\
+$\eta$ & learning rate cục bộ & Quá lớn $\rightarrow$ phân kỳ; quá nhỏ $\rightarrow$ chậm \\
+$B$ & batch size cục bộ & $B$ lớn giảm nhiễu gradient nhưng có thể làm update chậm hơn \\
+fraction\_fit & tỷ lệ client tham gia & Tỷ lệ thấp giảm chi phí/vòng nhưng tăng phương sai \\
+weights & trọng số tổng hợp & Trọng số theo $n_k$ tăng hiệu quả thống kê \\
+\bottomrule
+\end{tabular}
+\caption{Các siêu tham số của FedAvg}
+\end{table}
+
+\section{Liên hệ với triển khai Flower trong repo}
+
+\subsection{FedAvg trong Flower}
+
+Server của bạn dùng strategy \texttt{FedAvg} có sẵn trong Flower, cấu hình với các tham số như:
+\begin{itemize}
+    \item \texttt{fraction\_fit}: tỷ lệ client được lấy mẫu mỗi vòng,
+    \item \texttt{min\_fit\_clients}: số client tối thiểu cần có để huấn luyện,
+    \item \texttt{min\_available\_clients}: số client tối thiểu phải ``online/available''.
+\end{itemize}
+
+File \texttt{flower\_server\_metrics.py} kế thừa \texttt{FedAvg} thành \texttt{MetricsFedAvg} để log:
+thời gian mỗi vòng, bytes gửi/nhận, số tham số, và metric đánh giá đã tổng hợp.
+
+\subsection{FedAvg tổng hợp ở đâu}
+
+Trong Flower, phép tổng hợp được thực hiện trong hàm \texttt{aggregate\_fit} của strategy.
+Class tuỳ biến của bạn gọi \texttt{super().aggregate\_fit(...)} (thực hiện FedAvg) và sau đó bổ sung phần logging/metrics.
+
+\begin{lstlisting}[language=Python,caption={Flower strategy pattern used in your repo (simplified)}]
+from flwr.server.strategy import FedAvg
+
+class MetricsFedAvg(FedAvg):
+    def aggregate_fit(self, rnd, results, failures):
+        aggregated_weights, aggregated_metrics = super().aggregate_fit(rnd, results, failures)
+        # ... your code: track bytes, params, iid flag, dashboard, mlflow ...
+        return aggregated_weights, aggregated_metrics
+\end{lstlisting}
+
+\section{Lưu ý thực tế (triển khai thật)}
+
+\subsection{Tham gia một phần (partial participation)}
+Thực tế thường chỉ một phần client tham gia ở mỗi vòng. FedAvg hỗ trợ tự nhiên thông qua $S_t$.
+Tuy nhiên việc lấy mẫu có thể làm tăng phương sai; trọng số theo $n_k$ giúp giảm nhưng không triệt tiêu hoàn toàn tính ngẫu nhiên.
+
+\subsection{Client chậm (straggler) và rớt kết nối (dropout)}
+Client có thể chậm hoặc không gửi kết quả về đúng hạn.
+Thực tế server thường đặt timeout và tổng hợp các kết quả nhận được (Flower có hỗ trợ round timeout).
+
+\subsection{Chi phí giao tiếp}
+Chi phí giao tiếp mỗi vòng tăng theo kích thước mô hình $d$ và số client tham gia $|S_t|$.
+Repo của bạn đã theo dõi:
+\[
+\text{Bytes per round} \approx \text{Bytes sent} + \text{Bytes received}.
+\]
+Giảm kích thước mô hình, nén trọng số, hoặc giảm tỷ lệ tham gia có thể giảm chi phí.
+
+\subsection{Tăng cường riêng tư (tuỳ chọn)}
+FedAvg tự thân không đảm bảo riêng tư tuyệt đối. Các kỹ thuật bổ trợ thường gặp gồm:
+\begin{itemize}
+    \item \textbf{Differential Privacy (DP)}: thêm nhiễu vào gradient/cập nhật hoặc dùng DP-SGD ở client.
+    \item \textbf{Secure Aggregation}: tổng hợp bằng mật mã để server không thể xem cập nhật từng client.
+\end{itemize}
+Worker của bạn có tuỳ chọn DP; DP sẽ làm thay đổi động học tối ưu, nhưng cấu trúc ``trung bình ở server'' vẫn tương tự.
+
+\section{Tóm tắt}
+
+FedAvg giải bài toán:
+\[
+\min_w \sum_{k=1}^{K}\frac{n_k}{n}F_k(w)
+\]
+bằng cách lặp xen kẽ giữa:
+\begin{enumerate}
+    \item \textbf{Tối ưu cục bộ} ở client (nhiều bước SGD),
+    \item \textbf{Trung bình có trọng số} ở server:
+    \[
+    w_{t+1} = \sum_{k \in S_t} \frac{n_k}{\sum_{j \in S_t} n_j} w_{t+1}^{(k)}.
+    \]
+\end{enumerate}
+
+FedAvg hoạt động tốt nhất trong bối cảnh IID và có thể suy giảm khi Non-IID mạnh do hiện tượng client drift, điều này liên quan trực tiếp tới các thí nghiệm IID vs Non-IID của bạn.
+
+\end{document}
+
+

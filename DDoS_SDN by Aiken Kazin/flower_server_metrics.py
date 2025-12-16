@@ -73,9 +73,21 @@ class MetricsFedAvg(FedAvg):
         self.final_weights = None
         self.final_metrics = {}
         self.models_dir = "models"
+        # Use /app/visualizations in container (mounted from ./visualizations), fallback to ./visualizations locally
+        if os.path.exists("/app/visualizations"):
+            self.visualizations_dir = "/app/visualizations"
+        else:
+            self.visualizations_dir = "visualizations"
+        os.makedirs(self.visualizations_dir, exist_ok=True)
+        logger.info(f"✅ Visualizations directory initialized: {os.path.abspath(self.visualizations_dir)}")
         # Model architecture parameters (defaults, will be updated from workers)
         self.num_features = 23  # Default from dataset
         self.num_classes = 2    # Default binary classification
+        
+        # Store confusion matrix data
+        self.final_y_true = []
+        self.final_y_pred = []
+        self.iid_status = True  # Will be updated from workers
         
         # Initialize MLflow if available (non-blocking, will retry later)
         self.mlflow_run = None
@@ -349,6 +361,84 @@ class MetricsFedAvg(FedAvg):
             import traceback
             traceback.print_exc()
     
+    def _save_confusion_matrix(self):
+        """Generate and save confusion matrix as PNG image"""
+        if not self.final_y_true or not self.final_y_pred:
+            logger.warning(f"⚠️ No confusion matrix data available for {self.model_type} - y_true: {len(self.final_y_true) if self.final_y_true else 0}, y_pred: {len(self.final_y_pred) if self.final_y_pred else 0}")
+            return
+        
+        logger.info(f"📊 Generating confusion matrix for {self.model_type} with {len(self.final_y_true)} samples...")
+        
+        try:
+            import matplotlib
+            matplotlib.use("Agg")  # Non-interactive backend
+            import matplotlib.pyplot as plt
+            import seaborn as sns
+            from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score, f1_score
+            
+            # Convert to numpy arrays
+            y_true = np.array(self.final_y_true)
+            y_pred = np.array(self.final_y_pred)
+            
+            # Compute confusion matrix
+            cm = confusion_matrix(y_true, y_pred)
+            
+            # Calculate metrics
+            accuracy = accuracy_score(y_true, y_pred) * 100
+            precision = precision_score(y_true, y_pred, average='weighted', zero_division=0) * 100
+            recall = recall_score(y_true, y_pred, average='weighted', zero_division=0) * 100
+            f1 = f1_score(y_true, y_pred, average='weighted', zero_division=0) * 100
+            
+            # Create figure
+            fig, ax = plt.subplots(figsize=(8, 6))
+            
+            # Plot heatmap
+            sns.heatmap(
+                cm,
+                annot=True,
+                fmt='d',
+                cmap='Blues',
+                xticklabels=[f"Class {i}" for i in range(len(cm))],
+                yticklabels=[f"Class {i}" for i in range(len(cm))],
+                cbar_kws={'label': 'Count'},
+                ax=ax,
+                linewidths=0.5,
+                linecolor='gray'
+            )
+            
+            # Set title and labels
+            distribution_type = "IID" if self.iid_status else "Non-IID"
+            ax.set_title(
+                f"Confusion Matrix - {self.model_type} ({distribution_type})\n"
+                f"Accuracy: {accuracy:.2f}% | Precision: {precision:.2f}% | Recall: {recall:.2f}% | F1: {f1:.2f}%",
+                fontsize=13,
+                fontweight='bold',
+                pad=20
+            )
+            ax.set_xlabel("Predicted Label", fontsize=12)
+            ax.set_ylabel("True Label", fontsize=12)
+            
+            plt.tight_layout()
+            
+            # Save figure
+            filename = f"confusion_matrix_{self.model_type}_{distribution_type.lower()}.png"
+            save_path = os.path.join(self.visualizations_dir, filename)
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            logger.info(f"✅ Confusion matrix saved: {save_path} (Accuracy: {accuracy:.2f}%)")
+            logger.info(f"   File exists: {os.path.exists(save_path)}")
+            logger.info(f"   File size: {os.path.getsize(save_path) if os.path.exists(save_path) else 'N/A'} bytes")
+            
+        except ImportError as e:
+            logger.error(f"❌ Required libraries not available for confusion matrix visualization: {e}")
+            import traceback
+            traceback.print_exc()
+        except Exception as e:
+            logger.error(f"❌ Failed to save confusion matrix for {self.model_type}: {e}")
+            import traceback
+            traceback.print_exc()
+    
     def configure_fit(self, server_round: int, parameters, client_manager):
         """Configure fit round - track round start and send params"""
         self.current_round = server_round
@@ -470,6 +560,7 @@ class MetricsFedAvg(FedAvg):
                     dp_metrics["dp_noise_multiplier"] = fit_res.metrics["dp_noise_multiplier"]
                 if "iid" in fit_res.metrics:
                     iid_status = fit_res.metrics["iid"]
+                    self.iid_status = iid_status  # Store for visualizations
             
             dashboard_data = {
                 "round": rnd,
@@ -531,6 +622,7 @@ class MetricsFedAvg(FedAvg):
             for client, fit_res in results:
                 if fit_res.metrics and "iid" in fit_res.metrics:
                     iid_status = bool(fit_res.metrics["iid"])  # Explicitly convert to bool
+                    self.iid_status = iid_status  # Store for visualizations
                     logger.info(f"Round {rnd}: Extracted IID status from worker: {iid_status}")
                     break  # Use first found IID status (all workers should have same setting)
         
@@ -737,12 +829,49 @@ class MetricsFedAvg(FedAvg):
         self.round_metrics["accuracy"] = accuracy
         self.round_metrics["loss"] = aggregated_loss
         
-        self._send_to_dashboard({
+        # Collect predictions for confusion matrix (only on final round)
+        y_true_all = []
+        y_pred_all = []
+        if rnd >= self.num_rounds:
+            logger.info(f"🔍 Final round ({rnd}) - Collecting confusion matrix data from {len(results)} workers...")
+            for client, eval_res in results:
+                if eval_res.metrics:
+                    if "y_true" in eval_res.metrics and "y_pred" in eval_res.metrics:
+                        y_true_count = len(eval_res.metrics["y_true"])
+                        y_pred_count = len(eval_res.metrics["y_pred"])
+                        y_true_all.extend(eval_res.metrics["y_true"])
+                        y_pred_all.extend(eval_res.metrics["y_pred"])
+                        logger.info(f"  ✓ Worker {client.cid}: Collected {y_true_count} true labels, {y_pred_count} predictions")
+                    else:
+                        logger.warning(f"  ✗ Worker {client.cid}: No y_true/y_pred in metrics. Available keys: {list(eval_res.metrics.keys())}")
+                else:
+                    logger.warning(f"  ✗ Worker {client.cid}: No metrics available")
+            
+            # Store for saving confusion matrix image
+            if y_true_all and y_pred_all:
+                self.final_y_true = y_true_all
+                self.final_y_pred = y_pred_all
+                logger.info(f"✅ Collected {len(y_true_all)} total predictions for confusion matrix ({self.model_type})")
+                # Generate and save confusion matrix image
+                self._save_confusion_matrix()
+            else:
+                logger.error(f"❌ No confusion matrix data collected for {self.model_type} on final round! y_true: {len(y_true_all)}, y_pred: {len(y_pred_all)}")
+        
+        dashboard_data = {
             "round": rnd,
             "accuracy": float(accuracy),
             "loss": float(aggregated_loss),
             "model_type": self.model_type
-        })
+        }
+        
+        # Add confusion matrix data if available
+        if y_true_all and y_pred_all:
+            dashboard_data["confusion_matrix"] = {
+                "y_true": y_true_all,
+                "y_pred": y_pred_all
+            }
+        
+        self._send_to_dashboard(dashboard_data)
         
         # Log evaluation metrics to MLflow (accuracy/loss from evaluation)
         if self.mlflow_enabled and MLFLOW_AVAILABLE and self.mlflow_run:
