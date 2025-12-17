@@ -20,7 +20,6 @@ This document provides a comprehensive, step-by-step plan to implement MLOps for
 
 - ❌ Experiment tracking system
 - ❌ Model versioning and registry
-- ❌ Automated CI/CD pipelines
 - ❌ Production deployment
 - ❌ Automated retraining
 - ❌ Data versioning
@@ -460,238 +459,17 @@ class DataQualityMonitor:
         return drift_detected
 ```
 
-### Phase 3: CI/CD Pipeline (Week 3-4)
+### Phase 3: Model Registry & Deployment (Week 3-4)
 
-#### Step 3.1: GitHub Actions Workflow
+#### Step 3.1: Model Registry Implementation
 
-**File:** Create `.github/workflows/fl_training.yml`
+**File:** `mlops/model_registry.py` (already exists)
 
-**Code:**
+The model registry tracks all trained models, their versions, and metadata.
 
-```yaml
-name: Federated Learning Training Pipeline
+#### Step 3.2: Model Versioning
 
-on:
-  schedule:
-    # Weekly retraining every Sunday at 2 AM
-    - cron: '0 2 * * 0'
-  workflow_dispatch:
-    inputs:
-      model_type:
-        description: 'Model type to train'
-        required: true
-        default: 'MLPv2'
-        type: choice
-        options:
-          - MLPv2
-          - LSTM
-          - CNN1D
-          - CNN_LSTM
-      num_rounds:
-        description: 'Number of FL rounds'
-        required: false
-        default: 5
-        type: number
-
-jobs:
-  validate-data:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.9'
-      
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install great-expectations
-      
-      - name: Validate dataset
-        run: |
-          python mlops/validate_data.py
-      
-      - name: Check data quality
-        run: |
-          python mlops/check_data_quality.py
-
-  fl-training:
-    needs: validate-data
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        model_type: [MLPv2, LSTM, CNN1D, CNN_LSTM]
-    
-    steps:
-      - uses: actions/checkout@v3
-      
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.9'
-      
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install mlflow
-      
-      - name: Start MLflow server
-        run: |
-          mlflow server --backend-store-uri sqlite:///mlflow.db \
-                        --default-artifact-root ./mlruns \
-                        --host 0.0.0.0 --port 5000 &
-        continue-on-error: true
-      
-      - name: Start FL Server
-        run: |
-          docker-compose up -d flower-server-${{ matrix.model_type.lower() }}
-        env:
-          FL_MODEL_TYPE: ${{ matrix.model_type }}
-      
-      - name: Start FL Workers
-        run: |
-          docker-compose up -d flower-worker-1 flower-worker-2
-      
-      - name: Wait for FL Training
-        run: |
-          python mlops/wait_for_fl_completion.py \
-            --model-type ${{ matrix.model_type }} \
-            --max-wait 3600
-      
-      - name: Evaluate Model
-        run: |
-          python evaluate.py --model-name ${{ matrix.model_type }}_FL.h5
-      
-      - name: Register Model in MLflow
-        run: |
-          python mlops/register_model.py \
-            --model-path models/${{ matrix.model_type }}_FL.h5 \
-            --model-type ${{ matrix.model_type }}
-      
-      - name: Compare with Previous Model
-        run: |
-          python mlops/compare_models.py \
-            --new-model ${{ matrix.model_type }}_FL.h5 \
-            --model-type ${{ matrix.model_type }}
-      
-      - name: Deploy if Improved
-        if: success()
-        run: |
-          python mlops/deploy_if_improved.py \
-            --model-type ${{ matrix.model_type }}
-
-  notify:
-    needs: [fl-training]
-    runs-on: ubuntu-latest
-    if: always()
-    steps:
-      - name: Notify Results
-        run: |
-          echo "FL Training completed for all models"
-          # Add Slack/Email notification here
-```
-
-#### Step 3.2: Pre-commit Hooks
-
-**File:** Create `.pre-commit-config.yaml`
-
-**Code:**
-
-```yaml
-repos:
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.4.0
-    hooks:
-      - id: trailing-whitespace
-      - id: end-of-file-fixer
-      - id: check-yaml
-      - id: check-added-large-files
-      - id: check-json
-  
-  - repo: https://github.com/psf/black
-    rev: 23.3.0
-    hooks:
-      - id: black
-        language_version: python3.9
-  
-  - repo: https://github.com/pycqa/flake8
-    rev: 6.0.0
-    hooks:
-      - id: flake8
-        args: [--max-line-length=100]
-```
-
-**Setup:**
-
-```bash
-pip install pre-commit
-pre-commit install
-```
-
-#### Step 3.3: Automated Testing
-
-**File:** Create `tests/test_fl_pipeline.py`
-
-**Code:**
-
-```python
-import pytest
-import numpy as np
-from flower_worker import FlowerWorker
-from mlops.data_validation import DataValidator
-
-class TestFLPipeline:
-    def test_data_validation(self):
-        """Test data validation before FL training"""
-        validator = DataValidator()
-        # Create test dataframe
-        df = pd.DataFrame({
-            'feature1': [1, 2, 3],
-            'feature2': [4, 5, 6],
-            'label': [0, 1, 0]
-        })
-        
-        is_valid, results = validator.validate_dataset(df)
-        assert is_valid == True
-    
-    def test_model_creation(self):
-        """Test model creation for each type"""
-        model_types = ['MLPv2', 'CNN1D', 'LSTM', 'CNN_LSTM']
-        
-        for model_type in model_types:
-            worker = FlowerWorker(
-                worker_id="test_worker",
-                model_type=model_type,
-                data_partition=0.1
-            )
-            model = worker._create_model()
-            assert model is not None
-            assert model.count_params() > 0
-    
-    def test_weight_aggregation(self):
-        """Test FedAvg weight aggregation"""
-        # Simulate weights from 2 clients
-        weights_client1 = [np.array([1.0, 2.0]), np.array([3.0])]
-        weights_client2 = [np.array([2.0, 3.0]), np.array([4.0])]
-        
-        # Simulate FedAvg: average weights
-        aggregated = [
-            (w1 + w2) / 2 
-            for w1, w2 in zip(weights_client1, weights_client2)
-        ]
-        
-        assert len(aggregated) == 2
-        assert np.allclose(aggregated[0], [1.5, 2.5])
-```
-
-**Run tests:**
-
-```bash
-pip install pytest pytest-cov
-pytest tests/ -v --cov=.
-```
+Models are versioned by round number and timestamp. See `flower_server_metrics.py` for implementation.
 
 ### Phase 4: Model Deployment (Week 4-5)
 
@@ -1369,13 +1147,11 @@ class ABTesting:
 - [ ] Set up data drift detection
 - [ ] Test data validation pipeline
 
-### Phase 3: CI/CD
+### Phase 3: Model Registry
 
-- [ ] Create GitHub Actions workflow
-- [ ] Set up pre-commit hooks
-- [ ] Write unit tests
-- [ ] Configure automated testing
-- [ ] Test CI/CD pipeline
+- [ ] Implement model versioning
+- [ ] Set up model registry
+- [ ] Track model metadata
 
 ### Phase 4: Deployment
 
@@ -1429,10 +1205,6 @@ DDoS_SDN by Aiken Kazin/
 │   ├── test_fl_pipeline.py
 │   ├── test_data_validation.py
 │   └── test_model_serving.py
-├── .github/
-│   └── workflows/
-│       └── fl_training.yml        # CI/CD pipeline
-├── .pre-commit-config.yaml        # Pre-commit hooks
 ├── mlruns/                        # MLflow artifacts
 ├── mlflow.db                      # MLflow database
 └── requirements-mlops.txt         # MLOps dependencies
@@ -1454,9 +1226,9 @@ DDoS_SDN by Aiken Kazin/
 
 ### Phase 3 Success Criteria
 
-- CI/CD pipeline runs automatically
-- Tests pass before deployment
-- Automated model training on schedule
+- Model registry tracks all versions
+- Models are versioned by round and timestamp
+- Model metadata is searchable
 
 ### Phase 4 Success Criteria
 
@@ -1482,7 +1254,7 @@ DDoS_SDN by Aiken Kazin/
 |-----------|--------------|---------------------|
 | Phase 1: Foundation | Week 1-2 | MLflow integration, model versioning |
 | Phase 2: Data Management | Week 2-3 | Data validation, versioning |
-| Phase 3: CI/CD | Week 3-4 | Automated pipelines, testing |
+| Phase 3: Model Registry | Week 3-4 | Model versioning, registry |
 | Phase 4: Deployment | Week 4-5 | Model serving API |
 | Phase 5: Monitoring | Week 5-6 | Production monitoring, alerts |
 | Phase 6: Automation | Week 6-7 | Automated retraining |

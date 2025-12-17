@@ -236,99 +236,7 @@ mlflow.register_model(
 \end{aligned}
 \]
 
-\subsection{5. CI/CD Pipeline (FL-Aware)}
-
-\subsubsection{FL Pipeline Stages:}
-
-\textbf{Stage 1: Data Validation (Client-Side)}
-\begin{itemize}
-    \item Validate data format on each client
-    \item Check data quality (missing values, outliers)
-    \item Verify data distribution (IID/non-IID)
-    \item \textbf{Privacy:} Validation happens locally, only metadata sent
-\end{itemize}
-
-\textbf{Stage 2: Model Initialization (Server-Side)}
-\begin{itemize}
-    \item Initialize global model architecture
-    \item Set hyperparameters (learning rate, epochs per round)
-    \item Configure FL strategy (FedAvg parameters)
-\end{itemize}
-
-\textbf{Stage 3: FL Training Loop (Distributed)}
-\begin{itemize}
-    \item \textbf{For each round:}
-    \begin{enumerate}
-        \item Server sends global weights to clients
-        \item Clients train locally (parallel)
-        \item Clients send updated weights back
-        \item Server aggregates weights (FedAvg)
-        \item Server evaluates aggregated model
-        \item Log metrics, version model
-    \end{enumerate}
-\end{itemize}
-
-\textbf{Stage 4: Model Validation (Server-Side)}
-\begin{itemize}
-    \item Check convergence (accuracy improvement)
-    \item Validate model performance (threshold check)
-    \item Compare with previous rounds
-    \item Decide: continue training or deploy
-\end{itemize}
-
-\textbf{Stage 5: Deployment (Server-Side)}
-\begin{itemize}
-    \item Deploy aggregated global model
-    \item Update model registry
-    \item Notify clients of new model version
-    \item Monitor production performance
-\end{itemize}
-
-\subsubsection{GitHub Actions Example:}
-
-\begin{lstlisting}[language=YAML]
-name: FL Training Pipeline
-
-on:
-  schedule:
-    - cron: '0 0 * * 0'  # Weekly retraining
-  workflow_dispatch:
-
-jobs:
-  fl-training:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Validate Data
-        run: python validate_data.py
-        
-      - name: Start FL Server
-        run: |
-          docker-compose up -d flower-server-mlpv2
-          
-      - name: Start FL Clients
-        run: |
-          docker-compose up -d flower-worker-1 flower-worker-2
-          
-      - name: Monitor FL Training
-        run: |
-          python monitor_fl_training.py --wait-for-completion
-          
-      - name: Evaluate Model
-        run: |
-          python evaluate_fl_model.py --model MLPv2_FL.h5
-          
-      - name: Register Model
-        if: success()
-        run: |
-          mlflow models register --model-path models/MLPv2_FL.h5
-          
-      - name: Deploy if Improved
-        if: success()
-        run: |
-          python deploy_if_improved.py
-\end{lstlisting}
-
-\subsection{6. Model Deployment (FL-Specific)}
+\subsection{5. Model Deployment (FL-Specific)}
 
 \subsubsection{Deployment Architecture:}
 
@@ -389,7 +297,7 @@ def deploy_fl_model(model_path, model_version):
     start_monitoring(global_model)
 \end{lstlisting}
 
-\subsection{7. Automated Retraining (FL-Specific)}
+\subsection{6. Automated Retraining (FL-Specific)}
 
 \subsubsection{Retraining Triggers:}
 
@@ -674,9 +582,9 @@ def save_fl_model(model, round_num, accuracy, model_type):
 \subsection{Phase 2: Automation (Weeks 3-4)}
 
 \begin{enumerate}
-    \item \textbf{CI/CD pipeline:} Automated FL training
     \item \textbf{Model registry:} Centralized model management
     \item \textbf{Automated evaluation:} Post-training validation
+    \item \textbf{Model versioning:} Track model versions and metadata
 \end{enumerate}
 
 \subsection{Phase 3: Production (Weeks 5-6)}

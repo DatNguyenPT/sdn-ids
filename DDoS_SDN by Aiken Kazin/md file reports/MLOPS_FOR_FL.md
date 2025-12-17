@@ -197,92 +197,7 @@ $$\begin{aligned}
 \text{Client Contribution} &= \frac{n_k \cdot \text{Accuracy}_k}{\sum n_k}
 \end{aligned}$$
 
-### 5. CI/CD Pipeline (FL-Aware)
-
-#### FL Pipeline Stages:
-
-**Stage 1: Data Validation (Client-Side)**
-
-- Validate data format on each client
-- Check data quality (missing values, outliers)
-- Verify data distribution (IID/non-IID)
-- **Privacy:** Validation happens locally, only metadata sent
-
-**Stage 2: Model Initialization (Server-Side)**
-
-- Initialize global model architecture
-- Set hyperparameters (learning rate, epochs per round)
-- Configure FL strategy (FedAvg parameters)
-
-**Stage 3: FL Training Loop (Distributed)**
-
-- **For each round:**
-  1. Server sends global weights to clients
-  2. Clients train locally (parallel)
-  3. Clients send updated weights back
-  4. Server aggregates weights (FedAvg)
-  5. Server evaluates aggregated model
-  6. Log metrics, version model
-
-**Stage 4: Model Validation (Server-Side)**
-
-- Check convergence (accuracy improvement)
-- Validate model performance (threshold check)
-- Compare with previous rounds
-- Decide: continue training or deploy
-
-**Stage 5: Deployment (Server-Side)**
-
-- Deploy aggregated global model
-- Update model registry
-- Notify clients of new model version
-- Monitor production performance
-
-#### GitHub Actions Example:
-
-```yaml
-name: FL Training Pipeline
-
-on:
-  schedule:
-    - cron: '0 0 * * 0'  # Weekly retraining
-  workflow_dispatch:
-
-jobs:
-  fl-training:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Validate Data
-        run: python validate_data.py
-        
-      - name: Start FL Server
-        run: |
-          docker-compose up -d flower-server-mlpv2
-          
-      - name: Start FL Clients
-        run: |
-          docker-compose up -d flower-worker-1 flower-worker-2
-          
-      - name: Monitor FL Training
-        run: |
-          python monitor_fl_training.py --wait-for-completion
-          
-      - name: Evaluate Model
-        run: |
-          python evaluate_fl_model.py --model MLPv2_FL.h5
-          
-      - name: Register Model
-        if: success()
-        run: |
-          mlflow models register --model-path models/MLPv2_FL.h5
-          
-      - name: Deploy if Improved
-        if: success()
-        run: |
-          python deploy_if_improved.py
-```
-
-### 6. Model Deployment (FL-Specific)
+### 5. Model Deployment (FL-Specific)
 
 #### Deployment Architecture:
 
@@ -338,7 +253,7 @@ def deploy_fl_model(model_path, model_version):
     start_monitoring(global_model)
 ```
 
-### 7. Automated Retraining (FL-Specific)
+### 6. Automated Retraining (FL-Specific)
 
 #### Retraining Triggers:
 
@@ -482,7 +397,6 @@ params_sent = self._count_parameters(weights)
 - ❌ Model versioning
 - ❌ Experiment tracking (MLflow)
 - ❌ Model registry
-- ❌ Automated pipelines
 - ❌ Production deployment
 - ❌ Automated retraining
 
@@ -539,7 +453,7 @@ def save_fl_model(model, round_num, accuracy, model_type):
 
 #### Tier 2: Production (Next Steps)
 
-**3. FL-Aware CI/CD Pipeline**
+**3. Model Registry & Versioning**
 
 - Automated FL training on schedule
 - Model validation after each round
