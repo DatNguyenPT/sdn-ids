@@ -199,9 +199,9 @@ pipeline {
                             ELAPSED=0
                             TRAINING_COMPLETE=false
                             
-                            while [ \\$ELAPSED -lt \\$TIMEOUT ]; do
-                                SERVER_LOGS=\\$(docker compose -f ${env.DOCKER_COMPOSE_FILE} logs flower-server-lstm 2>&1)
-                                if echo "\\$SERVER_LOGS" | grep -qE "Training completed|FL training finished|round 2/2|Final round"; then
+                            while [ \$ELAPSED -lt \$TIMEOUT ]; do
+                                SERVER_LOGS=\$(docker compose -f ${env.DOCKER_COMPOSE_FILE} logs flower-server-lstm 2>&1)
+                                if echo "\$SERVER_LOGS" | grep -qE "Training completed|FL training finished|round 2/2|Final round"; then
                                     echo "Training completed (found in logs)!"
                                     TRAINING_COMPLETE=true
                                     break
@@ -213,19 +213,19 @@ pipeline {
                                     break
                                 fi
                                 
-                                if echo "\\$SERVER_LOGS" | grep -qE "Waiting for clients|Requesting initial parameters"; then
-                                    echo "   Server waiting for clients... (\\$ELAPSED/\\$TIMEOUT seconds)"
-                                elif echo "\\$SERVER_LOGS" | grep -qE "round 1|round 2|Round"; then
-                                    echo "   Training in progress... (\\$ELAPSED/\\$TIMEOUT seconds)"
+                                if echo "\$SERVER_LOGS" | grep -qE "Waiting for clients|Requesting initial parameters"; then
+                                    echo "   Server waiting for clients... (\$ELAPSED/\$TIMEOUT seconds)"
+                                elif echo "\$SERVER_LOGS" | grep -qE "round 1|round 2|Round"; then
+                                    echo "   Training in progress... (\$ELAPSED/\$TIMEOUT seconds)"
                                 else
-                                    echo "   Checking status... (\\$ELAPSED/\\$TIMEOUT seconds)"
+                                    echo "   Checking status... (\$ELAPSED/\$TIMEOUT seconds)"
                                 fi
                                 
                                 sleep 10
-                                ELAPSED=\\$((ELAPSED + 10))
+                                ELAPSED=\$((ELAPSED + 10))
                             done
                             
-                            if [ "\\$TRAINING_COMPLETE" = false ]; then
+                            if [ "\$TRAINING_COMPLETE" = false ]; then
                                 echo "Timeout waiting for training completion"
                                 echo "Checking current status..."
                                 docker compose -f ${env.DOCKER_COMPOSE_FILE} ps
@@ -244,10 +244,10 @@ pipeline {
                             if (fileExists(modelFile)) {
                                 echo "Model file created: models/LSTM_FL.h5"
                                 sh """
-                                    MODEL_SIZE=\\$(ls -lh models/LSTM_FL.h5 | awk '{print \\$5}')
+                                    MODEL_SIZE=\$(ls -lh models/LSTM_FL.h5 | awk '{print \$5}')
                                     echo "Model Statistics:"
                                     echo "   - File: models/LSTM_FL.h5"
-                                    echo "   - Size: \\$MODEL_SIZE"
+                                    echo "   - Size: \$MODEL_SIZE"
                                     ls -lh models/LSTM_FL.h5
                                 """
                             } else {
@@ -271,7 +271,7 @@ pipeline {
                         
                         // Check MLflow runs
                         sh """
-                            if [ -d "mlruns" ] && [ "\\$(ls -A mlruns)" ]; then
+                            if [ -d "mlruns" ] && [ "\$(ls -A mlruns)" ]; then
                                 echo "MLflow runs directory exists and contains data"
                                 echo "MLflow Statistics:"
                                 echo "   - Runs directory: mlruns/"
