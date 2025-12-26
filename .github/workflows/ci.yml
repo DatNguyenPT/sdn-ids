@@ -202,11 +202,57 @@ jobs:
         run: |
           docker compose -f docker-compose.ci.yml build --no-cache
       
-      - name: Start FL System
+      - name: Start FL System and Wait for Training
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
+          echo "Starting FL system..."
           docker compose -f docker-compose.ci.yml up -d mlflow-server fl-dashboard flower-server-lstm flower-worker-1 flower-worker-2
-          sleep 15
+          
+          echo "Waiting for services to start..."
+          sleep 20
+          
+          echo "Waiting for FL training to complete (max 5 minutes)..."
+          TIMEOUT=300
+          ELAPSED=0
+          TRAINING_COMPLETE=false
+          
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            # Check if training completed by looking for completion message in logs
+            SERVER_LOGS=$(docker compose -f docker-compose.ci.yml logs flower-server-lstm 2>&1)
+            if echo "$SERVER_LOGS" | grep -qE "Training completed|FL training finished|round 2/2|Final round"; then
+              echo "✅ Training completed (found in logs)!"
+              TRAINING_COMPLETE=true
+              break
+            fi
+            
+            # Check if model file exists
+            if [ -f "models/LSTM_FL.h5" ]; then
+              echo "✅ Model file found!"
+              TRAINING_COMPLETE=true
+              break
+            fi
+            
+            # Check if server is still waiting (not started training yet)
+            if echo "$SERVER_LOGS" | grep -qE "Waiting for clients|Requesting initial parameters"; then
+              echo "   Server waiting for clients... ($ELAPSED/$TIMEOUT seconds)"
+            elif echo "$SERVER_LOGS" | grep -qE "round 1|round 2|Round"; then
+              echo "   Training in progress... ($ELAPSED/$TIMEOUT seconds)"
+            else
+              echo "   Checking status... ($ELAPSED/$TIMEOUT seconds)"
+            fi
+            
+            sleep 10
+            ELAPSED=$((ELAPSED + 10))
+          done
+          
+          if [ "$TRAINING_COMPLETE" = false ]; then
+            echo "⚠️  Timeout waiting for training completion"
+            echo "Checking current status..."
+            docker compose -f docker-compose.ci.yml ps
+            echo ""
+            echo "Server logs (last 30 lines):"
+            docker compose -f docker-compose.ci.yml logs flower-server-lstm | tail -30
+          fi
       
       - name: Verify System Behavior
         working-directory: ${{ env.PROJECT_DIR }}
@@ -214,6 +260,9 @@ jobs:
           echo "=========================================="
           echo "Stage 5: Verifying System Behavior"
           echo "=========================================="
+          
+          # Wait a bit more to ensure model file is written
+          sleep 5
           
           # Check if model was created
           if [ -f "models/LSTM_FL.h5" ]; then
@@ -225,7 +274,17 @@ jobs:
             ls -lh models/LSTM_FL.h5
           else
             echo "❌ WARNING: Model file not found, checking logs..."
-            docker compose -f docker-compose.ci.yml logs flower-server-lstm | tail -50
+            echo "Container status:"
+            docker compose -f docker-compose.ci.yml ps
+            echo ""
+            echo "Server logs (last 100 lines):"
+            docker compose -f docker-compose.ci.yml logs flower-server-lstm | tail -100
+            echo ""
+            echo "Worker 1 logs (last 50 lines):"
+            docker compose -f docker-compose.ci.yml logs flower-worker-1 | tail -50
+            echo ""
+            echo "Worker 2 logs (last 50 lines):"
+            docker compose -f docker-compose.ci.yml logs flower-worker-2 | tail -50
             exit 1
           fi
           
