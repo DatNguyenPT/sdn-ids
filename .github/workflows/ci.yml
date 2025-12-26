@@ -34,7 +34,7 @@ jobs:
           echo "=========================================="
           
           # Build all required images
-          docker-compose -f docker-compose.ci.yml build --no-cache
+          docker compose -f docker-compose.ci.yml build --no-cache
           
           echo "Docker images built successfully"
       
@@ -58,26 +58,26 @@ jobs:
           echo "=========================================="
           
           # Start infrastructure services first (MLflow, Dashboard)
-          docker-compose -f docker-compose.ci.yml up -d mlflow-server fl-dashboard
+          docker compose -f docker-compose.ci.yml up -d mlflow-server fl-dashboard
           
           # Wait for MLflow to be ready
           echo "Waiting for MLflow server to be ready..."
-          timeout 60 bash -c 'until curl -f http://localhost:5002/health 2>/dev/null || docker-compose -f docker-compose.ci.yml logs mlflow-server | grep -q "listening"; do sleep 2; done' || true
+          timeout 60 bash -c 'until curl -f http://localhost:5002/health 2>/dev/null || docker compose -f docker-compose.ci.yml logs mlflow-server | grep -q "listening"; do sleep 2; done' || true
           
           # Start FL server
-          docker-compose -f docker-compose.ci.yml up -d flower-server-lstm
+          docker compose -f docker-compose.ci.yml up -d flower-server-lstm
           
           # Wait for FL server to be ready
           echo "Waiting for FL server to be ready..."
           sleep 10
           
           # Start workers
-          docker-compose -f docker-compose.ci.yml up -d flower-worker-1 flower-worker-2
+          docker compose -f docker-compose.ci.yml up -d flower-worker-1 flower-worker-2
           
           echo "FL System started"
           
           # Show running containers
-          docker-compose -f docker-compose.ci.yml ps
+          docker compose -f docker-compose.ci.yml ps
       
       - name: Stage 3 - MLflow Health Check
         working-directory: ${{ env.PROJECT_DIR }}
@@ -125,7 +125,7 @@ jobs:
             ls -lh models/LSTM_FL.h5
           else
             echo "WARNING: Model file not found, checking logs..."
-            docker-compose -f docker-compose.ci.yml logs flower-server-lstm | tail -50
+            docker compose -f docker-compose.ci.yml logs flower-server-lstm | tail -50
             exit 1
           fi
           
@@ -139,13 +139,13 @@ jobs:
           
           # Check container status
           echo "Container status:"
-          docker-compose -f docker-compose.ci.yml ps
+          docker compose -f docker-compose.ci.yml ps
           
           # Check for errors in logs
           echo "Checking for errors in server logs..."
-          if docker-compose -f docker-compose.ci.yml logs flower-server-lstm | grep -i "error\|exception\|failed"; then
+          if docker compose -f docker-compose.ci.yml logs flower-server-lstm | grep -i "error\|exception\|failed"; then
             echo "WARNING: Errors found in server logs"
-            docker-compose -f docker-compose.ci.yml logs flower-server-lstm | tail -100
+            docker compose -f docker-compose.ci.yml logs flower-server-lstm | tail -100
           else
             echo "No critical errors found in server logs"
           fi
@@ -161,19 +161,19 @@ jobs:
           echo "=========================================="
           
           echo "--- FL Server Logs ---"
-          docker-compose -f docker-compose.ci.yml logs flower-server-lstm || true
+          docker compose -f docker-compose.ci.yml logs flower-server-lstm || true
           
           echo "--- Worker 1 Logs ---"
-          docker-compose -f docker-compose.ci.yml logs flower-worker-1 || true
+          docker compose -f docker-compose.ci.yml logs flower-worker-1 || true
           
           echo "--- Worker 2 Logs ---"
-          docker-compose -f docker-compose.ci.yml logs flower-worker-2 || true
+          docker compose -f docker-compose.ci.yml logs flower-worker-2 || true
           
           echo "--- MLflow Server Logs ---"
-          docker-compose -f docker-compose.ci.yml logs mlflow-server || true
+          docker compose -f docker-compose.ci.yml logs mlflow-server || true
           
           echo "--- Dashboard Logs ---"
-          docker-compose -f docker-compose.ci.yml logs fl-dashboard || true
+          docker compose -f docker-compose.ci.yml logs fl-dashboard || true
       
       - name: Stage 6 - Shutdown & Cleanup
         if: always()
@@ -184,7 +184,7 @@ jobs:
           echo "=========================================="
           
           # Stop all containers
-          docker-compose -f docker-compose.ci.yml down -v
+          docker compose -f docker-compose.ci.yml down -v
           
           # Clean up Docker resources
           docker system prune -f
