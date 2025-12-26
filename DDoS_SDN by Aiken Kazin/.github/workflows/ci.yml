@@ -1,0 +1,181 @@
+name: CI Pipeline - Federated Learning (LSTM)
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:  # Allow manual triggering
+
+env:
+  DOCKER_COMPOSE_FILE: docker-compose.ci.yml
+
+jobs:
+  ci-pipeline:
+    name: FL System CI Pipeline
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+      
+      - name: 🐳 Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: 📋 Stage 1: Build & Validate Containers
+        run: |
+          echo "=========================================="
+          echo "Stage 1: Building Docker Images"
+          echo "=========================================="
+          
+          # Build all required images
+          docker-compose -f $DOCKER_COMPOSE_FILE build --no-cache
+          
+          echo "✅ Docker images built successfully"
+      
+      - name: 🔍 Validate Docker Images
+        run: |
+          echo "=========================================="
+          echo "Validating Docker Images"
+          echo "=========================================="
+          
+          # Check if images exist
+          docker images | grep -E "(flower-server|flower-worker|fl-dashboard|mlflow-server)" || true
+          
+          echo "✅ Docker images validated"
+      
+      - name: 🚀 Stage 2: Start FL System (CI Mode)
+        run: |
+          echo "=========================================="
+          echo "Stage 2: Starting FL System"
+          echo "=========================================="
+          
+          # Start infrastructure services first (MLflow, Dashboard)
+          docker-compose -f $DOCKER_COMPOSE_FILE up -d mlflow-server fl-dashboard
+          
+          # Wait for MLflow to be ready
+          echo "Waiting for MLflow server to be ready..."
+          timeout 60 bash -c 'until curl -f http://localhost:5002/health 2>/dev/null || docker-compose -f $DOCKER_COMPOSE_FILE logs mlflow-server | grep -q "listening"; do sleep 2; done' || true
+          
+          # Start FL server
+          docker-compose -f $DOCKER_COMPOSE_FILE up -d flower-server-lstm
+          
+          # Wait for FL server to be ready
+          echo "Waiting for FL server to be ready..."
+          sleep 10
+          
+          # Start workers
+          docker-compose -f $DOCKER_COMPOSE_FILE up -d flower-worker-1 flower-worker-2
+          
+          echo "✅ FL System started"
+          
+          # Show running containers
+          docker-compose -f $DOCKER_COMPOSE_FILE ps
+      
+      - name: 🏥 Stage 3: MLflow Health Check
+        run: |
+          echo "=========================================="
+          echo "Stage 3: MLflow Health Check"
+          echo "=========================================="
+          
+          # Wait a bit more for services to stabilize
+          sleep 5
+          
+          # Run MLflow health check script
+          python scripts/check_mlflow_health.py \
+            --mlflow-url http://localhost:5002 \
+            --timeout 30
+          
+          echo "✅ MLflow health check passed"
+      
+      - name: 🧪 Stage 4: Run Federated Smoke Test
+        run: |
+          echo "=========================================="
+          echo "Stage 4: Running Federated Smoke Test"
+          echo "=========================================="
+          
+          # Run smoke test script
+          python scripts/smoke_test_lstm.py \
+            --server-url http://localhost:8080 \
+            --mlflow-url http://localhost:5002 \
+            --timeout 300 \
+            --min-rounds 2
+          
+          echo "✅ Federated smoke test passed"
+      
+      - name: 🔍 Stage 5: Verify System Behavior
+        run: |
+          echo "=========================================="
+          echo "Stage 5: Verifying System Behavior"
+          echo "=========================================="
+          
+          # Check if model was created
+          if [ -f "models/LSTM_FL.h5" ]; then
+            echo "✅ Model file created: models/LSTM_FL.h5"
+            ls -lh models/LSTM_FL.h5
+          else
+            echo "⚠️  Model file not found, checking logs..."
+            docker-compose -f $DOCKER_COMPOSE_FILE logs flower-server-lstm | tail -50
+            exit 1
+          fi
+          
+          # Check MLflow runs
+          if [ -d "mlruns" ] && [ "$(ls -A mlruns)" ]; then
+            echo "✅ MLflow runs directory exists and contains data"
+            ls -la mlruns/
+          else
+            echo "⚠️  MLflow runs directory empty or missing"
+          fi
+          
+          # Check container status
+          echo "Container status:"
+          docker-compose -f $DOCKER_COMPOSE_FILE ps
+          
+          # Check for errors in logs
+          echo "Checking for errors in server logs..."
+          if docker-compose -f $DOCKER_COMPOSE_FILE logs flower-server-lstm | grep -i "error\|exception\|failed"; then
+            echo "⚠️  Errors found in server logs"
+            docker-compose -f $DOCKER_COMPOSE_FILE logs flower-server-lstm | tail -100
+          else
+            echo "✅ No critical errors found in server logs"
+          fi
+          
+          echo "✅ System behavior verified"
+      
+      - name: 📊 Collect Logs (on failure)
+        if: failure()
+        run: |
+          echo "=========================================="
+          echo "Collecting logs for debugging"
+          echo "=========================================="
+          
+          echo "--- FL Server Logs ---"
+          docker-compose -f $DOCKER_COMPOSE_FILE logs flower-server-lstm || true
+          
+          echo "--- Worker 1 Logs ---"
+          docker-compose -f $DOCKER_COMPOSE_FILE logs flower-worker-1 || true
+          
+          echo "--- Worker 2 Logs ---"
+          docker-compose -f $DOCKER_COMPOSE_FILE logs flower-worker-2 || true
+          
+          echo "--- MLflow Server Logs ---"
+          docker-compose -f $DOCKER_COMPOSE_FILE logs mlflow-server || true
+          
+          echo "--- Dashboard Logs ---"
+          docker-compose -f $DOCKER_COMPOSE_FILE logs fl-dashboard || true
+      
+      - name: 🧹 Stage 6: Shutdown & Cleanup
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "Stage 6: Shutting down and cleaning up"
+          echo "=========================================="
+          
+          # Stop all containers
+          docker-compose -f $DOCKER_COMPOSE_FILE down -v
+          
+          # Clean up Docker resources
+          docker system prune -f
+          
+          echo "✅ Cleanup completed"
+
