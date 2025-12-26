@@ -13,6 +13,25 @@ pipeline {
     }
     
     stages {
+        stage('Checkout Code') {
+            steps {
+                checkout([
+                    $class: 'GitSCM',
+                    branches: [[name: '*/main']],
+                    extensions: [],
+                    userRemoteConfigs: [[
+                        credentialsId: 'jenkins-pat',
+                        url: 'https://github.com/DatNguyenPT/sdn-ids.git'
+                    ]]
+                ])
+                
+                script {
+                    echo "Repository checked out successfully"
+                    sh 'git rev-parse HEAD'
+                }
+            }
+        }
+        
         stage('Stage 1 - Build & Validate Containers') {
             steps {
                 dir(env.PROJECT_DIR) {
