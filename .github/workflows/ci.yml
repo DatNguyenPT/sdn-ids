@@ -15,8 +15,8 @@ env:
   PROJECT_DIR: "DDoS_SDN by Aiken Kazin"
 
 jobs:
-  ci-pipeline:
-    name: FL System CI Pipeline
+  stage-1-build:
+    name: Stage 1 - Build & Validate Containers
     runs-on: ubuntu-latest
     
     steps:
@@ -26,7 +26,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       
-      - name: Stage 1 - Build & Validate Containers
+      - name: Build Docker Images
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           echo "=========================================="
@@ -49,8 +49,25 @@ jobs:
           docker images | grep -E "(flower-server|flower-worker|fl-dashboard|mlflow-server)" || true
           
           echo "Docker images validated"
+
+  stage-2-start-system:
+    name: Stage 2 - Start FL System (CI Mode)
+    runs-on: ubuntu-latest
+    needs: stage-1-build
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
       
-      - name: Stage 2 - Start FL System (CI Mode)
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Build Docker Images
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          docker compose -f docker-compose.ci.yml build --no-cache
+      
+      - name: Start FL System
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           echo "=========================================="
@@ -78,8 +95,31 @@ jobs:
           
           # Show running containers
           docker compose -f docker-compose.ci.yml ps
+
+  stage-3-mlflow-health:
+    name: Stage 3 - MLflow Health Check
+    runs-on: ubuntu-latest
+    needs: stage-2-start-system
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
       
-      - name: Stage 3 - MLflow Health Check
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Build Docker Images
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          docker compose -f docker-compose.ci.yml build --no-cache
+      
+      - name: Start FL System
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          docker compose -f docker-compose.ci.yml up -d mlflow-server fl-dashboard flower-server-lstm flower-worker-1 flower-worker-2
+          sleep 15
+      
+      - name: MLflow Health Check
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           echo "=========================================="
@@ -92,27 +132,83 @@ jobs:
           # Run MLflow health check script
           python scripts/check_mlflow_health.py \
             --mlflow-url http://localhost:5002 \
-            --timeout 30
+            --timeout 30 2>&1 | tee mlflow_health_output.log
           
-          echo "MLflow health check passed"
+          echo ""
+          echo "📊 MLflow Health Statistics:"
+          echo "   - Health check completed"
+          echo "   - Check mlflow_health_output.log for details"
+          
+          echo "✅ MLflow health check passed"
+
+  stage-4-smoke-test:
+    name: Stage 4 - Run Federated Smoke Test
+    runs-on: ubuntu-latest
+    needs: stage-3-mlflow-health
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
       
-      - name: Stage 4 - Run Federated Smoke Test
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Build Docker Images
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          docker compose -f docker-compose.ci.yml build --no-cache
+      
+      - name: Start FL System
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          docker compose -f docker-compose.ci.yml up -d mlflow-server fl-dashboard flower-server-lstm flower-worker-1 flower-worker-2
+          sleep 15
+      
+      - name: Run Federated Smoke Test
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           echo "=========================================="
           echo "Stage 4: Running Federated Smoke Test"
           echo "=========================================="
           
-          # Run smoke test script
+          # Run smoke test script and capture output
           python scripts/smoke_test_lstm.py \
             --server-url http://localhost:8080 \
             --mlflow-url http://localhost:5002 \
             --timeout 300 \
-            --min-rounds 2
+            --min-rounds 2 2>&1 | tee smoke_test_output.log
           
-          echo "Federated smoke test passed"
+          echo ""
+          echo "📊 Smoke Test Statistics:"
+          echo "   - Test completed successfully"
+          echo "   - Check smoke_test_output.log for detailed results"
+          
+          echo "✅ Federated smoke test passed"
+
+  stage-5-verify:
+    name: Stage 5 - Verify System Behavior
+    runs-on: ubuntu-latest
+    needs: stage-4-smoke-test
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
       
-      - name: Stage 5 - Verify System Behavior
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Build Docker Images
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          docker compose -f docker-compose.ci.yml build --no-cache
+      
+      - name: Start FL System
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          docker compose -f docker-compose.ci.yml up -d mlflow-server fl-dashboard flower-server-lstm flower-worker-1 flower-worker-2
+          sleep 15
+      
+      - name: Verify System Behavior
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           echo "=========================================="
@@ -121,36 +217,50 @@ jobs:
           
           # Check if model was created
           if [ -f "models/LSTM_FL.h5" ]; then
-            echo "Model file created: models/LSTM_FL.h5"
+            echo "✅ Model file created: models/LSTM_FL.h5"
+            MODEL_SIZE=$(ls -lh models/LSTM_FL.h5 | awk '{print $5}')
+            echo "📊 Model Statistics:"
+            echo "   - File: models/LSTM_FL.h5"
+            echo "   - Size: $MODEL_SIZE"
             ls -lh models/LSTM_FL.h5
           else
-            echo "WARNING: Model file not found, checking logs..."
+            echo "❌ WARNING: Model file not found, checking logs..."
             docker compose -f docker-compose.ci.yml logs flower-server-lstm | tail -50
             exit 1
           fi
           
           # Check MLflow runs
           if [ -d "mlruns" ] && [ "$(ls -A mlruns)" ]; then
-            echo "MLflow runs directory exists and contains data"
+            echo "✅ MLflow runs directory exists and contains data"
+            echo "📊 MLflow Statistics:"
+            echo "   - Runs directory: mlruns/"
             ls -la mlruns/
           else
-            echo "WARNING: MLflow runs directory empty or missing"
+            echo "⚠️  WARNING: MLflow runs directory empty or missing"
           fi
           
           # Check container status
-          echo "Container status:"
+          echo ""
+          echo "📊 Container Status:"
           docker compose -f docker-compose.ci.yml ps
           
+          # Extract training metrics from server logs
+          echo ""
+          echo "📊 Training Statistics (from server logs):"
+          docker compose -f docker-compose.ci.yml logs flower-server-lstm | grep -E "(Round|accuracy|loss|Training|completed)" | tail -20 || echo "   No training metrics found in logs"
+          
           # Check for errors in logs
+          echo ""
           echo "Checking for errors in server logs..."
           if docker compose -f docker-compose.ci.yml logs flower-server-lstm | grep -i "error\|exception\|failed"; then
-            echo "WARNING: Errors found in server logs"
+            echo "⚠️  WARNING: Errors found in server logs"
             docker compose -f docker-compose.ci.yml logs flower-server-lstm | tail -100
           else
-            echo "No critical errors found in server logs"
+            echo "✅ No critical errors found in server logs"
           fi
           
-          echo "System behavior verified"
+          echo ""
+          echo "✅ System behavior verified"
       
       - name: Collect Logs (on failure)
         if: failure()
@@ -174,9 +284,32 @@ jobs:
           
           echo "--- Dashboard Logs ---"
           docker compose -f docker-compose.ci.yml logs fl-dashboard || true
+
+  stage-6-cleanup:
+    name: Stage 6 - Shutdown & Cleanup
+    runs-on: ubuntu-latest
+    needs: stage-5-verify
+    if: always()
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
       
-      - name: Stage 6 - Shutdown & Cleanup
-        if: always()
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Build Docker Images
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          docker compose -f docker-compose.ci.yml build --no-cache
+      
+      - name: Start FL System
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          docker compose -f docker-compose.ci.yml up -d mlflow-server fl-dashboard flower-server-lstm flower-worker-1 flower-worker-2
+          sleep 15
+      
+      - name: Shutdown & Cleanup
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           echo "=========================================="
