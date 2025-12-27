@@ -1,27 +1,25 @@
-# Docker Compose CI Profile - LSTM Model Only
-# This profile is optimized for CI/CD pipelines with minimal resources
-# Used by GitHub Actions for automated testing
-
 services:
-  # Flower Server for LSTM - Coordinates federated learning for LSTM model
   flower-server-lstm:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: flower-server-lstm-ci
     image: flower-server:latest
-    ports:
-      - "8080:8080"
     environment:
       - FL_SERVER_ADDRESS=0.0.0.0:8080
       - FL_MIN_CLIENTS=2
-      - FL_NUM_ROUNDS=2  # Reduced rounds for CI speed
-      - FL_FRACTION_FIT=1.0
-      - FL_FRACTION_EVALUATE=1.0
+      - FL_NUM_ROUNDS=2
       - FL_DASHBOARD_URL=http://fl-dashboard:5000
       - MLFLOW_TRACKING_URI=http://mlflow-server:5000
-    command: python flower_server_metrics.py --address 0.0.0.0 --port 8080 --min-clients 2 --num-rounds 2 --fraction-fit 1.0 --fraction-evaluate 1.0 --dashboard-url http://fl-dashboard:5000 --model-type LSTM --models-dir /app/models
-    restart: "no"
+    command: >
+      python flower_server_metrics.py
+      --address 0.0.0.0
+      --port 8080
+      --min-clients 2
+      --num-rounds 2
+      --dashboard-url http://fl-dashboard:5000
+      --model-type LSTM
+      --models-dir /app/models
     networks:
       - flower-network
     depends_on:
@@ -29,22 +27,16 @@ services:
       - mlflow-server
     volumes:
       - ./models:/app/models
-      - ./visualizations:/app/visualizations
 
-  # FL Dashboard - Visualization dashboard
   fl-dashboard:
     build:
       context: .
       dockerfile: Dockerfile.dashboard
     container_name: fl-dashboard-ci
     image: fl-dashboard:latest
-    ports:
-      - "5001:5000"
-    restart: "no"
     networks:
       - flower-network
 
-  # Worker 1 - LSTM (first worker)
   flower-worker-1:
     build:
       context: .
@@ -53,34 +45,16 @@ services:
     image: flower-worker:latest
     environment:
       - FL_SERVER_ADDRESS=flower-server-lstm:8080
-      - FL_WORKER_ID=worker1-lstm-ci
-      - FL_DATA_PARTITION=0.5
-      - FL_MODEL_TYPE=LSTM
-      - FL_EPOCHS_PER_ROUND=2  # Reduced epochs for CI speed
-      - FL_BATCH_SIZE=32
-      - FL_ENABLE_DP=false
-      - IID=true
     command: >
       python flower_worker.py
       --server-address flower-server-lstm:8080
-      --worker-id worker1-lstm-ci
-      --data-partition 0.5
-      --model-type LSTM
-      --epochs-per-round 2
-      --batch-size 32
+      --worker-id worker1
       --total-rounds 2
     depends_on:
       - flower-server-lstm
-    restart: "no"
     networks:
       - flower-network
-    volumes:
-      - ./dataset_sdn.csv:/app/dataset_sdn.csv:ro
-      - ./models:/app/models:rw
-    ports:
-      - "6001:6000"  # Worker inference API
 
-  # Worker 2 - LSTM (second worker)
   flower-worker-2:
     build:
       context: .
@@ -89,49 +63,27 @@ services:
     image: flower-worker:latest
     environment:
       - FL_SERVER_ADDRESS=flower-server-lstm:8080
-      - FL_WORKER_ID=worker2-lstm-ci
-      - FL_DATA_PARTITION=0.5
-      - FL_MODEL_TYPE=LSTM
-      - FL_EPOCHS_PER_ROUND=2  # Reduced epochs for CI speed
-      - FL_BATCH_SIZE=32
-      - FL_ENABLE_DP=false
-      - IID=true
     command: >
       python flower_worker.py
       --server-address flower-server-lstm:8080
-      --worker-id worker2-lstm-ci
-      --data-partition 0.5
-      --model-type LSTM
-      --epochs-per-round 2
-      --batch-size 32
+      --worker-id worker2
       --total-rounds 2
     depends_on:
       - flower-server-lstm
-    restart: "no"
     networks:
       - flower-network
-    volumes:
-      - ./dataset_sdn.csv:/app/dataset_sdn.csv:ro
-      - ./models:/app/models:rw
-    ports:
-      - "6002:6000"  # Worker inference API
 
-  # MLflow Tracking Server - Experiment tracking and model registry
   mlflow-server:
     build:
       context: .
       dockerfile: Dockerfile.mlflow
     container_name: mlflow-server-ci
     image: mlflow-server:latest
-    ports:
-      - "5002:5000"
     volumes:
       - ./mlruns:/app/mlruns
     networks:
       - flower-network
-    restart: "no"
 
 networks:
   flower-network:
     driver: bridge
-

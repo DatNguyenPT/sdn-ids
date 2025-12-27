@@ -77,7 +77,7 @@ pipeline {
                         // Wait for MLflow to be ready
                         echo "Waiting for MLflow server to be ready..."
                         sh """
-                            timeout 60 bash -c 'until curl -f http://localhost:5002/health 2>/dev/null || docker compose -f ${env.DOCKER_COMPOSE_FILE} logs mlflow-server | grep -q "listening"; do sleep 2; done' || true
+                            timeout 60 bash -c 'until curl -f http://mlflow-server:5002/health 2>/dev/null || docker compose -f ${env.DOCKER_COMPOSE_FILE} logs mlflow-server | grep -q "listening"; do sleep 2; done' || true
                         """
                         
                         // Start FL server
@@ -126,7 +126,7 @@ pipeline {
                         // Run MLflow health check script
                         sh """
                             python scripts/check_mlflow_health.py \\
-                                --mlflow-url http://localhost:5002 \\
+                                --mlflow-url http://mlflow-server:5002 \\
                                 --timeout 30 2>&1 | tee mlflow_health_output.log || true
                         """
                         
@@ -159,8 +159,8 @@ pipeline {
                         // Run smoke test script and capture output
                         sh """
                             python scripts/smoke_test_lstm.py \\
-                                --server-url http://localhost:8080 \\
-                                --mlflow-url http://localhost:5002 \\
+                                --server-url http://flower-server-lstm:8080 \\
+                                --mlflow-url http://mlflow-server:5000 \\
                                 --timeout 300 \\
                                 --min-rounds 2 \\
                                 --server-container flower-server-lstm-ci 2>&1 | tee smoke_test_output.log

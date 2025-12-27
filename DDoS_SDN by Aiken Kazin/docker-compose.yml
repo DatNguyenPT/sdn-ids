@@ -427,24 +427,6 @@ services:
       - flower-network
     restart: unless-stopped
 
-  # Jenkins CI/CD Server - Automated FL training pipeline
-  jenkins:
-    image: jenkins/jenkins:lts
-    container_name: jenkins
-    ports:
-      - "8090:8080"  # Jenkins web UI (8090 to avoid conflict with FL servers)
-      - "50000:50000"  # Jenkins agent port
-    volumes:
-      - ./jenkins_home:/var/jenkins_home  # Persistent Jenkins data
-      - /var/run/docker.sock:/var/run/docker.sock  # Docker socket for building images
-      - .:/var/jenkins_home/workspace/FL-Project:ro  # Read-only access to project
-    environment:
-      - JENKINS_OPTS=--httpPort=8080
-    networks:
-      - flower-network
-    restart: unless-stopped
-    user: root  # Required for Docker socket access
-
 networks:
   flower-network:
     driver: bridge
