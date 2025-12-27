@@ -353,7 +353,7 @@ pipeline {
   "build_id": "${BUILD_ID}",
   "build_number": "${BUILD_NUMBER}",
   "build_timestamp": "${BUILD_TIMESTAMP}",
-  "git_commit": "$(git rev-parse HEAD)",
+    "git_commit": "\$(git rev-parse HEAD)",
   "git_branch": "${GIT_BRANCH}",
   "model_type": "LSTM",
   "model_framework": "TensorFlow/Keras",
