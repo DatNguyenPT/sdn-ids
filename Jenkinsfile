@@ -200,7 +200,7 @@ pipeline {
                             sleep 20
                             
                             echo "Waiting for FL training to complete (max 15 minutes for LSTM)..."
-                            TIMEOUT=1000  # 1000 seconds = ~16.6 minutes
+                            TIMEOUT=900
                             ELAPSED=0
                             TRAINING_COMPLETE=false
                             
@@ -250,13 +250,23 @@ pipeline {
                             fi
                         """
                         
-                        // Wait for model file to be written to disk
-                        echo "Waiting for model file to be written..."
+                        // Wait for model file to be synced from container volume
+                        echo "Waiting for model file to be synced..."
                         sleep(time: 10, unit: 'SECONDS')
                         
-                        // Verify model file exists
-                        def modelFile = "${env.PROJECT_DIR}/models/LSTM_FL.h5"
-                        if (fileExists(modelFile)) {
+                        // Verify model file exists using shell command (more reliable)
+                        def modelCheckResult = sh(
+                            script: """
+                                if [ -f "models/LSTM_FL.h5" ]; then
+                                    echo "exists"
+                                else
+                                    echo "not_found"
+                                fi
+                            """,
+                            returnStdout: true
+                        ).trim()
+                        
+                        if (modelCheckResult == 'exists') {
                             echo "✅ Model file created successfully: models/LSTM_FL.h5"
                             sh """
                                 MODEL_SIZE=\$(ls -lh models/LSTM_FL.h5 | awk '{print \$5}')
@@ -265,6 +275,7 @@ pipeline {
                                 echo "   📁 File: models/LSTM_FL.h5"
                                 echo "   📊 Size: \$MODEL_SIZE"
                                 echo "   🏗️  Architecture: LSTM (2 rounds)"
+                                echo ""
                                 ls -lh models/LSTM_FL.h5
                             """
                         } else {
@@ -274,11 +285,11 @@ pipeline {
                                 echo "Container status:"
                                 docker compose -f ${env.DOCKER_COMPOSE_FILE} ps
                                 echo ""
-                                echo "Server logs (checking for save errors):"
-                                docker compose -f ${env.DOCKER_COMPOSE_FILE} logs flower-server-lstm | grep -A 5 -B 5 -i "save\\|model\\|error" | tail -30
-                                echo ""
                                 echo "Models directory contents:"
                                 ls -la models/ || echo "Models directory not found"
+                                echo ""
+                                echo "Checking server logs for save confirmation:"
+                                docker compose -f ${env.DOCKER_COMPOSE_FILE} logs flower-server-lstm | grep -i "Model saved"
                             """
                             error("Model file not found at expected location")
                         }
@@ -290,9 +301,7 @@ pipeline {
                                 echo "✅ MLflow tracking data collected"
                                 echo "   📁 Directory: mlruns/"
                                 EXPERIMENT_COUNT=\$(find mlruns -name "meta.yaml" | wc -l)
-                                RUN_COUNT=\$(find mlruns -type d -name "run-*" 2>/dev/null | wc -l || echo 0)
                                 echo "   🧪 Experiments: \$EXPERIMENT_COUNT"
-                                echo "   🏃 Runs tracked: \$RUN_COUNT"
                             else
                                 echo "⚠️  WARNING: MLflow runs directory empty or missing"
                             fi
@@ -304,7 +313,7 @@ pipeline {
                         echo "Training Summary:"
                         echo "=" * 60
                         sh """
-                            docker compose -f ${env.DOCKER_COMPOSE_FILE} logs flower-server-lstm | grep -E "Round.*complete|evaluation complete|SUMMARY" | tail -15
+                            docker compose -f ${env.DOCKER_COMPOSE_FILE} logs flower-server-lstm | grep -E "Round.*evaluation complete|Model saved" | tail -10
                         """
                         
                         // Show container status
