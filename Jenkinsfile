@@ -510,20 +510,20 @@ pipeline {
                             # Model validation checks
                             echo "Running model validation checks..."
                             if [ -f "models/LSTM_FL.h5" ]; then
-                                python -c "
+                                python -c '
 import h5py
 import sys
 try:
-    with h5py.File('models/LSTM_FL.h5', 'r') as f:
-        print('Model file integrity: OK')
-        if 'model_weights' in f:
-            print('Model weights: Present')
+    with h5py.File("models/LSTM_FL.h5", "r") as f:
+        print("Model file integrity: OK")
+        if "model_weights" in f:
+            print("Model weights: Present")
         else:
-            print('Model weights: Missing')
+            print("Model weights: Missing")
 except Exception as e:
-    print(f'Model validation failed: {e}')
+    print("Model validation failed: " + str(e))
     sys.exit(1)
-" > quality/model-validation.txt 2>/dev/null || echo "Model validation completed"
+' > quality/model-validation.txt 2>/dev/null || echo "Model validation completed"
 
                             # Quality gate criteria
                             echo "Quality Gate Results:" > quality/quality-gate.txt
