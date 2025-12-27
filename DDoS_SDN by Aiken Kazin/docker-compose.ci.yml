@@ -54,6 +54,8 @@ services:
       - flower-server-lstm
     networks:
       - flower-network
+    volumes:
+      - ./dataset_sdn.csv:/app/dataset_sdn.csv:ro
 
   flower-worker-2:
     build:
@@ -72,6 +74,8 @@ services:
       - flower-server-lstm
     networks:
       - flower-network
+    volumes:
+      - ./dataset_sdn.csv:/app/dataset_sdn.csv:ro
 
   mlflow-server:
     build:
