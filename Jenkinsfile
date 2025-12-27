@@ -345,7 +345,7 @@ pipeline {
 
                             # Run basic shell script security checks
                             echo "Checking shell scripts for security issues..."
-                            find . -name "*.sh" -type f -exec shellcheck \{\} \\; 2>/dev/null || echo "Shellcheck not available"
+                            find . -name "*.sh" -type f -exec shellcheck {} \\; 2>/dev/null || echo "Shellcheck not available"
 
                             # Create SAST summary
                             echo "SAST Security Summary:" > security/sast-summary.txt
