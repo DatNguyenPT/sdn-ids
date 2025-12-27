@@ -266,7 +266,7 @@ pipeline {
                         if (modelCheckResult == 'exists') {
                             echo "✅ Model file created successfully: models/LSTM_FL.h5"
                             sh """
-                                MODEL_SIZE=\$(ls -lh models/LSTM_FL.h5 | awk '{print \$5}')
+                                MODEL_SIZE=\$(stat -f%z models/LSTM_FL.h5 2>/dev/null || stat -c%s models/LSTM_FL.h5 2>/dev/null || ls -lh models/LSTM_FL.h5 | cut -d' ' -f5)
                                 echo ""
                                 echo "Model Statistics:"
                                 echo "   📁 File: models/LSTM_FL.h5"
@@ -345,7 +345,7 @@ pipeline {
 
                             # Run basic shell script security checks
                             echo "Checking shell scripts for security issues..."
-                            find . -name "*.sh" -type f -exec shellcheck {} \\; 2>/dev/null || echo "Shellcheck not available"
+                            find . -name "*.sh" -type f -exec shellcheck \{\} \\; 2>/dev/null || echo "Shellcheck not available"
 
                             # Create SAST summary
                             echo "SAST Security Summary:" > security/sast-summary.txt
@@ -501,7 +501,7 @@ pipeline {
 
                             # Python code quality (if pylint available)
                             which pylint || pip install pylint || echo "Pylint not available"
-                            find . -name "*.py" -not -path "./__pycache__/*" -exec pylint --output-format=json {} \\; > quality/pylint-report.json 2>/dev/null || echo "Pylint analysis completed"
+                            find . -name "*.py" -not -path "./__pycache__/*" -exec pylint --output-format=json \{\} \\; > quality/pylint-report.json 2>/dev/null || echo "Pylint analysis completed"
 
                             # Check test coverage (if pytest-cov available)
                             echo "Checking test coverage..."
@@ -527,9 +527,9 @@ except Exception as e:
 
                             # Quality gate criteria
                             echo "Quality Gate Results:" > quality/quality-gate.txt
-                            echo "- Code Quality: $([ -f quality/pylint-report.json ] && echo 'Analyzed' || echo 'Skipped')" >> quality/quality-gate.txt
-                            echo "- Test Coverage: $([ -f quality/coverage.xml ] && echo 'Measured' || echo 'Skipped')" >> quality/quality-gate.txt
-                            echo "- Model Validation: $([ -f quality/model-validation.txt ] && echo 'Passed' || echo 'Failed')" >> quality/quality-gate.txt
+                            echo "- Code Quality: \$([ -f quality/pylint-report.json ] && echo 'Analyzed' || echo 'Skipped')" >> quality/quality-gate.txt
+                            echo "- Test Coverage: \$([ -f quality/coverage.xml ] && echo 'Measured' || echo 'Skipped')" >> quality/quality-gate.txt
+                            echo "- Model Validation: \$([ -f quality/model-validation.txt ] && echo 'Passed' || echo 'Failed')" >> quality/quality-gate.txt
                             echo "- Security Scans: Completed" >> quality/quality-gate.txt
 
                             cat quality/quality-gate.txt
@@ -579,7 +579,7 @@ except Exception as e:
 
                             # 6. AI Supply Chain Security
                             echo "6. Checking AI Supply Chain Security..." >> ai-security/owasp-ai-checks.txt
-                            echo "Dependencies checked: $(pip list | wc -l) packages" >> ai-security/owasp-ai-checks.txt
+                            echo "Dependencies checked: \$(pip list | wc -l) packages" >> ai-security/owasp-ai-checks.txt
 
                             # 7. Sensitive Data Exposure
                             echo "7. Checking for Sensitive Data Exposure Protection..." >> ai-security/owasp-ai-checks.txt
