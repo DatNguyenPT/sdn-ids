@@ -379,7 +379,7 @@ pipeline {
 
                             # Alternative: Basic secrets pattern matching if gitleaks fails
                             echo "Running basic secrets pattern check..."
-                            grep -r "password\|secret\|key\|token" --include="*.py" --include="*.sh" --include="*.yml" --include="*.yaml" . | grep -v "example\|test\|dummy\|placeholder" > security/secrets-patterns.txt || echo "No obvious secrets patterns found"
+                            grep -r "password\\|secret\\|key\\|token" --include="*.py" --include="*.sh" --include="*.yml" --include="*.yaml" . | grep -v "example\\|test\\|dummy\\|placeholder" > security/secrets-patterns.txt || echo "No obvious secrets patterns found"
 
                             # Create secrets detection summary
                             echo "Secrets Detection Summary:" > security/secrets-summary.txt
