@@ -40,7 +40,7 @@ pipeline {
                     script {
                         echo "Stage 1: Building Docker Images"
                         sh """
-                            docker compose -f ${env.DOCKER_COMPOSE_FILE} build --no-cache
+                            docker-compose -f ${env.DOCKER_COMPOSE_FILE} build --no-cache
                         """
                         echo "Docker images built successfully"
 
@@ -59,21 +59,21 @@ pipeline {
                     script {
                         echo "Starting FL System"
                         sh """
-                            docker compose -f ${env.DOCKER_COMPOSE_FILE} up -d mlflow-server fl-dashboard
+                            docker-compose -f ${env.DOCKER_COMPOSE_FILE} up -d mlflow-server fl-dashboard
                         """
                         echo "Waiting for MLflow server to be ready..."
                         sh """
-                            timeout 60 bash -c 'until curl -f http://mlflow-server:5000/health 2>/dev/null || docker compose -f ${env.DOCKER_COMPOSE_FILE} logs mlflow-server | grep -q "listening"; do sleep 2; done' || true
+                            timeout 60 bash -c 'until curl -f http://mlflow-server:5000/health 2>/dev/null || docker-compose -f ${env.DOCKER_COMPOSE_FILE} logs mlflow-server | grep -q "listening"; do sleep 2; done' || true
                         """
                         sh """
-                            docker compose -f ${env.DOCKER_COMPOSE_FILE} up -d flower-server-lstm
+                            docker-compose -f ${env.DOCKER_COMPOSE_FILE} up -d flower-server-lstm
                         """
                         sleep(time: 10, unit: 'SECONDS')
                         sh """
-                            docker compose -f ${env.DOCKER_COMPOSE_FILE} up -d flower-worker-1 flower-worker-2
+                            docker-compose -f ${env.DOCKER_COMPOSE_FILE} up -d flower-worker-1 flower-worker-2
                         """
                         sh """
-                            docker compose -f ${env.DOCKER_COMPOSE_FILE} ps
+                            docker-compose -f ${env.DOCKER_COMPOSE_FILE} ps
                         """
                     }
                 }
@@ -86,7 +86,7 @@ pipeline {
                     script {
                         echo "MLflow Health Check"
                         sh """
-                            docker compose -f ${env.DOCKER_COMPOSE_FILE} up -d mlflow-server fl-dashboard flower-server-lstm flower-worker-1 flower-worker-2
+                            docker-compose -f ${env.DOCKER_COMPOSE_FILE} up -d mlflow-server fl-dashboard flower-server-lstm flower-worker-1 flower-worker-2
                         """
                         sleep(time: 20, unit: 'SECONDS')
                         sh """
@@ -106,7 +106,7 @@ pipeline {
                     script {
                         echo "Running Federated Smoke Test"
                         sh """
-                            docker compose -f ${env.DOCKER_COMPOSE_FILE} up -d mlflow-server fl-dashboard flower-server-lstm flower-worker-1 flower-worker-2
+                            docker-compose -f ${env.DOCKER_COMPOSE_FILE} up -d mlflow-server fl-dashboard flower-server-lstm flower-worker-1 flower-worker-2
                         """
                         sleep(time: 15, unit: 'SECONDS')
                         sh """
@@ -129,13 +129,13 @@ pipeline {
                     script {
                         echo "Verifying System Behavior"
                         sh """
-                            docker compose -f ${env.DOCKER_COMPOSE_FILE} up -d mlflow-server fl-dashboard flower-server-lstm flower-worker-1 flower-worker-2
+                            docker-compose -f ${env.DOCKER_COMPOSE_FILE} up -d mlflow-server fl-dashboard flower-server-lstm flower-worker-1 flower-worker-2
                             sleep 20
                             TIMEOUT=900
                             ELAPSED=0
                             TRAINING_COMPLETE=false
                             while [ \$ELAPSED -lt \$TIMEOUT ]; do
-                                SERVER_LOGS=\$(docker compose -f ${env.DOCKER_COMPOSE_FILE} logs flower-server-lstm 2>&1)
+                                SERVER_LOGS=\$(docker-compose -f ${env.DOCKER_COMPOSE_FILE} logs flower-server-lstm 2>&1)
                                 if echo "\$SERVER_LOGS" | grep -qE "All 2 rounds completed|Server for LSTM completed all rounds|SUMMARY"; then
                                     TRAINING_COMPLETE=true
                                     break
@@ -149,8 +149,8 @@ pipeline {
                             done
                             if [ "\$TRAINING_COMPLETE" = false ]; then
                                 echo "Training did not complete within \$TIMEOUT seconds"
-                                docker compose -f ${env.DOCKER_COMPOSE_FILE} ps
-                                docker compose -f ${env.DOCKER_COMPOSE_FILE} logs flower-server-lstm | tail -50
+                                docker-compose -f ${env.DOCKER_COMPOSE_FILE} ps
+                                docker-compose -f ${env.DOCKER_COMPOSE_FILE} logs flower-server-lstm | tail -50
                                 exit 1
                             fi
                         """
@@ -220,7 +220,7 @@ pipeline {
                     script {
                         echo "Running DAST"
                         sh '''
-                            docker compose -f ${DOCKER_COMPOSE_FILE} up -d fl-dashboard mlflow-server
+                            docker-compose -f ${DOCKER_COMPOSE_FILE} up -d fl-dashboard mlflow-server
                             sleep 30
                             curl -I http://localhost:5001 | grep -E "(X-Frame-Options|X-Content-Type-Options|Content-Security-Policy)" || true
                             curl -s http://localhost:5000/health | grep "ok" || true
@@ -374,7 +374,7 @@ EOF
             dir(env.PROJECT_DIR) {
                 script {
                     echo "Cleaning up"
-                    sh "docker compose -f ${env.DOCKER_COMPOSE_FILE} down -v || true"
+                    sh "docker-compose -f ${env.DOCKER_COMPOSE_FILE} down -v || true"
                     sh "docker system prune -f || true"
                 }
             }
@@ -384,11 +384,11 @@ EOF
                 script {
                     echo "Collecting logs for debugging"
                     sh """
-                        docker compose -f ${env.DOCKER_COMPOSE_FILE} logs flower-server-lstm || true
-                        docker compose -f ${env.DOCKER_COMPOSE_FILE} logs flower-worker-1 || true
-                        docker compose -f ${env.DOCKER_COMPOSE_FILE} logs flower-worker-2 || true
-                        docker compose -f ${env.DOCKER_COMPOSE_FILE} logs mlflow-server || true
-                        docker compose -f ${env.DOCKER_COMPOSE_FILE} logs fl-dashboard || true
+                        docker-compose -f ${env.DOCKER_COMPOSE_FILE} logs flower-server-lstm || true
+                        docker-compose -f ${env.DOCKER_COMPOSE_FILE} logs flower-worker-1 || true
+                        docker-compose -f ${env.DOCKER_COMPOSE_FILE} logs flower-worker-2 || true
+                        docker-compose -f ${env.DOCKER_COMPOSE_FILE} logs mlflow-server || true
+                        docker-compose -f ${env.DOCKER_COMPOSE_FILE} logs fl-dashboard || true
                     """
                 }
             }
