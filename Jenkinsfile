@@ -199,121 +199,123 @@ pipeline {
                             echo "Waiting for services to start..."
                             sleep 20
                             
-                            echo "Waiting for FL training to complete (max 5 minutes)..."
-                            TIMEOUT=300
+                            echo "Waiting for FL training to complete (max 15 minutes for LSTM)..."
+                            TIMEOUT=1000  # 1000 seconds = ~16.6 minutes
                             ELAPSED=0
                             TRAINING_COMPLETE=false
                             
                             while [ \$ELAPSED -lt \$TIMEOUT ]; do
                                 SERVER_LOGS=\$(docker compose -f ${env.DOCKER_COMPOSE_FILE} logs flower-server-lstm 2>&1)
-                                if echo "\$SERVER_LOGS" | grep -qE "Training completed|FL training finished|round 2/2|Final round"; then
-                                    echo "Training completed (found in logs)!"
+                                
+                                # Check for completion indicators
+                                if echo "\$SERVER_LOGS" | grep -qE "All 2 rounds completed|Server for LSTM completed all rounds|SUMMARY"; then
+                                    echo "✅ Training completed successfully!"
                                     TRAINING_COMPLETE=true
                                     break
                                 fi
                                 
+                                # Check if model file exists (alternative success indicator)
                                 if [ -f "models/LSTM_FL.h5" ]; then
-                                    echo "Model file found!"
+                                    echo "✅ Model file found!"
                                     TRAINING_COMPLETE=true
                                     break
                                 fi
                                 
-                                if echo "\$SERVER_LOGS" | grep -qE "Waiting for clients|Requesting initial parameters"; then
-                                    echo "   Server waiting for clients... (\$ELAPSED/\$TIMEOUT seconds)"
-                                elif echo "\$SERVER_LOGS" | grep -qE "round 1|round 2|Round"; then
-                                    echo "   Training in progress... (\$ELAPSED/\$TIMEOUT seconds)"
+                                # Show progress based on log content
+                                if echo "\$SERVER_LOGS" | grep -q "Waiting for clients"; then
+                                    echo "   ⏳ Server waiting for clients... (\$ELAPSED/\$TIMEOUT seconds)"
+                                elif echo "\$SERVER_LOGS" | grep -q "ROUND 1"; then
+                                    echo "   🔄 Round 1 in progress... (\$ELAPSED/\$TIMEOUT seconds)"
+                                elif echo "\$SERVER_LOGS" | grep -q "ROUND 2"; then
+                                    echo "   🔄 Round 2 in progress... (\$ELAPSED/\$TIMEOUT seconds)"
+                                elif echo "\$SERVER_LOGS" | grep -q "aggregate_fit.*received 2 results"; then
+                                    echo "   ✓ Aggregating weights... (\$ELAPSED/\$TIMEOUT seconds)"
                                 else
-                                    echo "   Checking status... (\$ELAPSED/\$TIMEOUT seconds)"
+                                    echo "   ⏳ Training in progress... (\$ELAPSED/\$TIMEOUT seconds)"
                                 fi
                                 
-                                sleep 10
-                                ELAPSED=\$((ELAPSED + 10))
+                                sleep 15
+                                ELAPSED=\$((ELAPSED + 15))
                             done
                             
                             if [ "\$TRAINING_COMPLETE" = false ]; then
-                                echo "Timeout waiting for training completion"
-                                echo "Checking current status..."
+                                echo "❌ ERROR: Training did not complete within \$TIMEOUT seconds"
+                                echo ""
+                                echo "Container status:"
                                 docker compose -f ${env.DOCKER_COMPOSE_FILE} ps
                                 echo ""
-                                echo "Server logs (last 30 lines):"
-                                docker compose -f ${env.DOCKER_COMPOSE_FILE} logs flower-server-lstm | tail -30
+                                echo "Server logs (last 50 lines):"
+                                docker compose -f ${env.DOCKER_COMPOSE_FILE} logs flower-server-lstm | tail -50
+                                exit 1
                             fi
                         """
                         
-                        // Wait a bit more to ensure model file is written
-                        sleep(time: 5, unit: 'SECONDS')
+                        // Wait for model file to be written to disk
+                        echo "Waiting for model file to be written..."
+                        sleep(time: 10, unit: 'SECONDS')
                         
                         // Verify model file exists
-                        script {
-                            def modelFile = "${env.PROJECT_DIR}/models/LSTM_FL.h5"
-                            if (fileExists(modelFile)) {
-                                echo "Model file created: models/LSTM_FL.h5"
-                                sh """
-                                    MODEL_SIZE=\$(ls -lh models/LSTM_FL.h5 | awk '{print \$5}')
-                                    echo "Model Statistics:"
-                                    echo "   - File: models/LSTM_FL.h5"
-                                    echo "   - Size: \$MODEL_SIZE"
-                                    ls -lh models/LSTM_FL.h5
-                                """
-                            } else {
-                                echo "WARNING: Model file not found, checking logs..."
-                                sh """
-                                    echo "Container status:"
-                                    docker compose -f ${env.DOCKER_COMPOSE_FILE} ps
-                                    echo ""
-                                    echo "Server logs (last 100 lines):"
-                                    docker compose -f ${env.DOCKER_COMPOSE_FILE} logs flower-server-lstm | tail -100
-                                    echo ""
-                                    echo "Worker 1 logs (last 50 lines):"
-                                    docker compose -f ${env.DOCKER_COMPOSE_FILE} logs flower-worker-1 | tail -50
-                                    echo ""
-                                    echo "Worker 2 logs (last 50 lines):"
-                                    docker compose -f ${env.DOCKER_COMPOSE_FILE} logs flower-worker-2 | tail -50
-                                """
-                                error("Model file not found")
-                            }
+                        def modelFile = "${env.PROJECT_DIR}/models/LSTM_FL.h5"
+                        if (fileExists(modelFile)) {
+                            echo "✅ Model file created successfully: models/LSTM_FL.h5"
+                            sh """
+                                MODEL_SIZE=\$(ls -lh models/LSTM_FL.h5 | awk '{print \$5}')
+                                echo ""
+                                echo "Model Statistics:"
+                                echo "   📁 File: models/LSTM_FL.h5"
+                                echo "   📊 Size: \$MODEL_SIZE"
+                                echo "   🏗️  Architecture: LSTM (2 rounds)"
+                                ls -lh models/LSTM_FL.h5
+                            """
+                        } else {
+                            echo "⚠️  WARNING: Model file not found after training completion"
+                            sh """
+                                echo ""
+                                echo "Container status:"
+                                docker compose -f ${env.DOCKER_COMPOSE_FILE} ps
+                                echo ""
+                                echo "Server logs (checking for save errors):"
+                                docker compose -f ${env.DOCKER_COMPOSE_FILE} logs flower-server-lstm | grep -A 5 -B 5 -i "save\\|model\\|error" | tail -30
+                                echo ""
+                                echo "Models directory contents:"
+                                ls -la models/ || echo "Models directory not found"
+                            """
+                            error("Model file not found at expected location")
                         }
                         
-                        // Check MLflow runs
+                        // Verify MLflow tracking
                         sh """
                             if [ -d "mlruns" ] && [ "\$(ls -A mlruns)" ]; then
-                                echo "MLflow runs directory exists and contains data"
-                                echo "MLflow Statistics:"
-                                echo "   - Runs directory: mlruns/"
-                                ls -la mlruns/
+                                echo ""
+                                echo "✅ MLflow tracking data collected"
+                                echo "   📁 Directory: mlruns/"
+                                EXPERIMENT_COUNT=\$(find mlruns -name "meta.yaml" | wc -l)
+                                RUN_COUNT=\$(find mlruns -type d -name "run-*" 2>/dev/null | wc -l || echo 0)
+                                echo "   🧪 Experiments: \$EXPERIMENT_COUNT"
+                                echo "   🏃 Runs tracked: \$RUN_COUNT"
                             else
-                                echo "WARNING: MLflow runs directory empty or missing"
+                                echo "⚠️  WARNING: MLflow runs directory empty or missing"
                             fi
                         """
                         
-                        // Check container status
+                        // Show final training summary
                         echo ""
-                        echo "Container Status:"
+                        echo "=" * 60
+                        echo "Training Summary:"
+                        echo "=" * 60
+                        sh """
+                            docker compose -f ${env.DOCKER_COMPOSE_FILE} logs flower-server-lstm | grep -E "Round.*complete|evaluation complete|SUMMARY" | tail -15
+                        """
+                        
+                        // Show container status
+                        echo ""
+                        echo "Final Container Status:"
                         sh """
                             docker compose -f ${env.DOCKER_COMPOSE_FILE} ps
                         """
                         
-                        // Extract training metrics from server logs
                         echo ""
-                        echo "Training Statistics (from server logs):"
-                        sh """
-                            docker compose -f ${env.DOCKER_COMPOSE_FILE} logs flower-server-lstm | grep -E "(Round|accuracy|loss|Training|completed)" | tail -20 || echo "   No training metrics found in logs"
-                        """
-                        
-                        // Check for errors in logs
-                        echo ""
-                        echo "Checking for errors in server logs..."
-                        sh """
-                            if docker compose -f ${env.DOCKER_COMPOSE_FILE} logs flower-server-lstm | grep -i "error\\|exception\\|failed"; then
-                                echo "WARNING: Errors found in server logs"
-                                docker compose -f ${env.DOCKER_COMPOSE_FILE} logs flower-server-lstm | tail -100
-                            else
-                                echo "No critical errors found in server logs"
-                            fi
-                        """
-                        
-                        echo ""
-                        echo "System behavior verified"
+                        echo "✅ System behavior verified successfully"
                     }
                 }
             }
