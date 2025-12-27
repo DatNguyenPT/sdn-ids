@@ -7,8 +7,6 @@ pipeline {
         NEXUS_REPOSITORY_URL = "http://localhost:8081"
         NEXUS_REPOSITORY_ID = "nexus-repo"
         NEXUS_DOCKER_REGISTRY_URL = "localhost:5000"
-        // Use Nexus Docker hosted registry as the docker registry
-        DOCKER_REGISTRY_URL = "${NEXUS_DOCKER_REGISTRY_URL}"
         BUILD_TIMESTAMP = "${BUILD_ID}-${BUILD_TIMESTAMP}"
     }
     
@@ -482,11 +480,11 @@ EOF
                     echo "=========================================="
                     echo "Stage 9: Pushing Docker Images to Nexus Registry"
                     echo "=========================================="
-                    
-                    withCredentials([usernamePassword(credentialsId: 'nexus-docker-credentials', usernameVariable: 'NEXUS_DOCKER_USER', passwordVariable: 'NEXUS_DOCKER_PASS')]) {
+
+                    withCredentials([usernamePassword(credentialsId: 'nexus-credentials', usernameVariable: 'NEXUS_USER', passwordVariable: 'NEXUS_PASS')]) {
                         sh """
-                            # Login to Nexus Docker hosted registry (use Nexus docker-hosted repository port)
-                            echo "\${NEXUS_DOCKER_PASS}" | docker login -u \${NEXUS_DOCKER_USER} --password-stdin ${NEXUS_DOCKER_REGISTRY_URL}
+                            # Login to Nexus Docker hosted registry
+                            echo "\${NEXUS_PASS}" | docker login -u \${NEXUS_USER} --password-stdin ${NEXUS_DOCKER_REGISTRY_URL}
 
                             # Tag and push flower-server image to Nexus Docker registry
                             echo "Tagging and pushing flower-server image to Nexus..."
@@ -524,9 +522,7 @@ EOF
                     }
                 }
             }
-        }
-
-        stage('Stage 10 - Generate Build Report') {
+        }        stage('Stage 10 - Generate Build Report') {
             steps {
                 dir(env.PROJECT_DIR) {
                     script {
