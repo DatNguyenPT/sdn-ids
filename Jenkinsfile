@@ -522,7 +522,9 @@ EOF
                     }
                 }
             }
-        }        stage('Stage 10 - Generate Build Report') {
+        }
+
+        stage('Stage 10 - Generate Build Report') {
             steps {
                 dir(env.PROJECT_DIR) {
                     script {
