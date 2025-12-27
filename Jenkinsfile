@@ -83,7 +83,7 @@ pipeline {
                         // Wait for MLflow to be ready
                         echo "Waiting for MLflow server to be ready..."
                         sh """
-                            timeout 60 bash -c 'until curl -f http://mlflow-server:5002/health 2>/dev/null || docker compose -f ${env.DOCKER_COMPOSE_FILE} logs mlflow-server | grep -q "listening"; do sleep 2; done' || true
+                            timeout 60 bash -c 'until curl -f http://mlflow-server:5000/health 2>/dev/null || docker compose -f ${env.DOCKER_COMPOSE_FILE} logs mlflow-server | grep -q "listening"; do sleep 2; done' || true
                         """
                         
                         // Start FL server

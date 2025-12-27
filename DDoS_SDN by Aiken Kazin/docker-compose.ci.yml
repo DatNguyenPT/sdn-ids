@@ -85,6 +85,10 @@ services:
     image: mlflow-server:latest
     volumes:
       - ./mlruns:/app/mlruns
+    # Expose MLflow UI to the host for temporary access during CI runs.
+    # Map host port 5002 -> container port 5000 to avoid conflicts with other host services.
+    ports:
+      - "5002:5000"
     networks:
       - flower-network
 
