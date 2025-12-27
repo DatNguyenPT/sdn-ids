@@ -1,0 +1,24 @@
+# Example Configuration for Batch Upload to Nexus
+# Use with: batch_upload_nexus.sh <this_file>
+#
+# Format: file_path:repository:nexus_url:username:password
+#
+# Replace placeholders:
+# - YOUR_PASSWORD: Your Nexus password
+# - BUILD_ID: Your Jenkins build ID (or use ${BUILD_ID} if running in Jenkins)
+#
+
+# Upload trained models to models-hosted repository
+./models/LSTM_FL.h5:models-hosted:http://localhost:8081:jenkins:YOUR_PASSWORD
+./models/feature_order.csv:models-hosted:http://localhost:8081:jenkins:YOUR_PASSWORD
+
+# Upload artifacts to raw-hosted repository
+./signatures/checksums.sha256:raw-hosted:http://localhost:8081:jenkins:YOUR_PASSWORD
+./signatures/model-metadata.json:raw-hosted:http://localhost:8081:jenkins:YOUR_PASSWORD
+
+# Upload logs (if compressed)
+# ./logs-${BUILD_ID}.tar.gz:raw-hosted:http://localhost:8081:jenkins:YOUR_PASSWORD
+
+# Example with Jenkins variable substitution (uncomment when using in Jenkins):
+# ./models/LSTM_FL.h5:models-hosted:http://localhost:8081:jenkins:${NEXUS_PASSWORD}
+# ./build-report.json:raw-hosted:http://localhost:8081:jenkins:${NEXUS_PASSWORD}
