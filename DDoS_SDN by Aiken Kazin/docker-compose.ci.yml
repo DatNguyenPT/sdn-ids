@@ -50,6 +50,7 @@ services:
       --server-address flower-server-lstm:8080
       --worker-id worker1
       --total-rounds 2
+      --model-type LSTM
     depends_on:
       - flower-server-lstm
     networks:
@@ -70,6 +71,7 @@ services:
       --server-address flower-server-lstm:8080
       --worker-id worker2
       --total-rounds 2
+      --model-type LSTM
     depends_on:
       - flower-server-lstm
     networks:
