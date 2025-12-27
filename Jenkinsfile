@@ -39,8 +39,23 @@ pipeline {
                 dir(env.PROJECT_DIR) {
                     script {
                         echo "Stage 1: Building Docker Images"
+                        // Set up Docker Buildx
                         sh """
-                            docker-compose -f ${env.DOCKER_COMPOSE_FILE} build --no-cache
+                            # Install/upgrade Docker Buildx if needed
+                            mkdir -p ~/.docker/cli-plugins
+                            if ! docker buildx version &>/dev/null; then
+                                echo "Installing Docker Buildx..."
+                                BUILDX_VERSION=v0.17.0
+                                curl -L "https://github.com/docker/buildx/releases/download/\${BUILDX_VERSION}/buildx-\${BUILDX_VERSION}.linux-amd64" -o ~/.docker/cli-plugins/docker-buildx
+                                chmod +x ~/.docker/cli-plugins/docker-buildx
+                                docker buildx install || true
+                            fi
+                            docker buildx version || echo "Buildx check completed"
+                            docker buildx create --use --name builder || docker buildx use builder || true
+                        """
+                        sh """
+                            # Build images with buildx
+                            COMPOSE_DOCKER_CLI_BUILD=1 DOCKER_BUILDKIT=1 docker-compose -f ${env.DOCKER_COMPOSE_FILE} build --no-cache
                         """
                         echo "Docker images built successfully"
 
