@@ -6,7 +6,6 @@ pipeline {
         DOCKER_COMPOSE_FILE = "docker-compose.ci.yml"
         NEXUS_REPOSITORY_URL = "http://localhost:8081"
         NEXUS_REPOSITORY_ID = "nexus-repo"
-        NEXUS_DOCKER_REGISTRY_URL = "localhost:5000"
         BUILD_TIMESTAMP = "${BUILD_ID}-${BUILD_TIMESTAMP}"
     }
     
@@ -474,50 +473,62 @@ EOF
             }
         }
 
-        stage('Stage 9 - Push Docker Images to Nexus Registry') {
+        stage('Stage 9 - Upload Docker Images to Nexus') {
             steps {
                 script {
                     echo "=========================================="
-                    echo "Stage 9: Pushing Docker Images to Nexus Registry"
+                    echo "Stage 9: Uploading Docker Images to Nexus"
                     echo "=========================================="
 
                     withCredentials([usernamePassword(credentialsId: 'nexus-credentials', usernameVariable: 'NEXUS_USER', passwordVariable: 'NEXUS_PASS')]) {
                         sh """
-                            # Login to Nexus Docker hosted registry
-                            echo "\${NEXUS_PASS}" | docker login -u \${NEXUS_USER} --password-stdin ${NEXUS_DOCKER_REGISTRY_URL}
+                            # Upload Docker images to Nexus docker-self-hosted repository
+                            echo "Uploading Docker images to Nexus docker-self-hosted repository..."
 
-                            # Tag and push flower-server image to Nexus Docker registry
-                            echo "Tagging and pushing flower-server image to Nexus..."
-                            docker tag flower-server:latest ${NEXUS_DOCKER_REGISTRY_URL}/flower-server:\${BUILD_ID}
-                            docker tag flower-server:latest ${NEXUS_DOCKER_REGISTRY_URL}/flower-server:latest
-                            docker push ${NEXUS_DOCKER_REGISTRY_URL}/flower-server:\${BUILD_ID}
-                            docker push ${NEXUS_DOCKER_REGISTRY_URL}/flower-server:latest
+                            NEXUS_DOCKER_REPO="${NEXUS_REPOSITORY_URL}/repository/docker-self-hosted"
+                            IMAGE_PATH="fl-pipeline/docker-images/${BUILD_ID}"
 
-                            # Tag and push flower-worker image to Nexus
-                            echo "Tagging and pushing flower-worker image to Nexus..."
-                            docker tag flower-worker:latest ${NEXUS_DOCKER_REGISTRY_URL}/flower-worker:\${BUILD_ID}
-                            docker tag flower-worker:latest ${NEXUS_DOCKER_REGISTRY_URL}/flower-worker:latest
-                            docker push ${NEXUS_DOCKER_REGISTRY_URL}/flower-worker:\${BUILD_ID}
-                            docker push ${NEXUS_DOCKER_REGISTRY_URL}/flower-worker:latest
+                            # Export and upload flower-server image
+                            if docker image inspect flower-server:latest >/dev/null 2>&1; then
+                                echo "Exporting and uploading flower-server image..."
+                                docker save flower-server:latest -o flower-server-${BUILD_ID}.tar
+                                curl -v -u \${NEXUS_USER}:\${NEXUS_PASS} \\
+                                    --upload-file flower-server-${BUILD_ID}.tar \\
+                                    "\${NEXUS_DOCKER_REPO}/\${IMAGE_PATH}/flower-server-${BUILD_ID}.tar"
+                                rm flower-server-${BUILD_ID}.tar
+                            fi
 
-                            # Tag and push fl-dashboard image to Nexus
-                            echo "Tagging and pushing fl-dashboard image to Nexus..."
-                            docker tag fl-dashboard:latest ${NEXUS_DOCKER_REGISTRY_URL}/fl-dashboard:\${BUILD_ID}
-                            docker tag fl-dashboard:latest ${NEXUS_DOCKER_REGISTRY_URL}/fl-dashboard:latest
-                            docker push ${NEXUS_DOCKER_REGISTRY_URL}/fl-dashboard:\${BUILD_ID}
-                            docker push ${NEXUS_DOCKER_REGISTRY_URL}/fl-dashboard:latest
+                            # Export and upload flower-worker image
+                            if docker image inspect flower-worker:latest >/dev/null 2>&1; then
+                                echo "Exporting and uploading flower-worker image..."
+                                docker save flower-worker:latest -o flower-worker-${BUILD_ID}.tar
+                                curl -v -u \${NEXUS_USER}:\${NEXUS_PASS} \\
+                                    --upload-file flower-worker-${BUILD_ID}.tar \\
+                                    "\${NEXUS_DOCKER_REPO}/\${IMAGE_PATH}/flower-worker-${BUILD_ID}.tar"
+                                rm flower-worker-${BUILD_ID}.tar
+                            fi
 
-                            # Tag and push mlflow-server image to Nexus
-                            echo "Tagging and pushing mlflow-server image to Nexus..."
-                            docker tag mlflow-server:latest ${NEXUS_DOCKER_REGISTRY_URL}/mlflow-server:\${BUILD_ID}
-                            docker tag mlflow-server:latest ${NEXUS_DOCKER_REGISTRY_URL}/mlflow-server:latest
-                            docker push ${NEXUS_DOCKER_REGISTRY_URL}/mlflow-server:\${BUILD_ID}
-                            docker push ${NEXUS_DOCKER_REGISTRY_URL}/mlflow-server:latest
+                            # Export and upload fl-dashboard image
+                            if docker image inspect fl-dashboard:latest >/dev/null 2>&1; then
+                                echo "Exporting and uploading fl-dashboard image..."
+                                docker save fl-dashboard:latest -o fl-dashboard-${BUILD_ID}.tar
+                                curl -v -u \${NEXUS_USER}:\${NEXUS_PASS} \\
+                                    --upload-file fl-dashboard-${BUILD_ID}.tar \\
+                                    "\${NEXUS_DOCKER_REPO}/\${IMAGE_PATH}/fl-dashboard-${BUILD_ID}.tar"
+                                rm fl-dashboard-${BUILD_ID}.tar
+                            fi
 
-                            # Logout from Nexus Docker registry
-                            docker logout ${NEXUS_DOCKER_REGISTRY_URL}
+                            # Export and upload mlflow-server image
+                            if docker image inspect mlflow-server:latest >/dev/null 2>&1; then
+                                echo "Exporting and uploading mlflow-server image..."
+                                docker save mlflow-server:latest -o mlflow-server-${BUILD_ID}.tar
+                                curl -v -u \${NEXUS_USER}:\${NEXUS_PASS} \\
+                                    --upload-file mlflow-server-${BUILD_ID}.tar \\
+                                    "\${NEXUS_DOCKER_REPO}/\${IMAGE_PATH}/mlflow-server-${BUILD_ID}.tar"
+                                rm mlflow-server-${BUILD_ID}.tar
+                            fi
 
-                            echo "All Docker images pushed to Nexus Docker hosted registry successfully"
+                            echo "Docker images uploaded to Nexus docker-self-hosted repository successfully"
                         """
                     }
                 }
@@ -555,13 +566,13 @@ EOF
     "nexus_repositories": {
         "models_repo": "${NEXUS_REPOSITORY_URL}/repository/models-hosted",
         "artifacts_repo": "${NEXUS_REPOSITORY_URL}/repository/raw-hosted",
-        "docker_registry": "${NEXUS_DOCKER_REGISTRY_URL}"
+        "docker_repo": "${NEXUS_REPOSITORY_URL}/repository/docker-self-hosted"
     },
     "docker_images": {
-        "flower_server": "${NEXUS_DOCKER_REGISTRY_URL}/flower-server:${BUILD_ID}",
-        "flower_worker": "${NEXUS_DOCKER_REGISTRY_URL}/flower-worker:${BUILD_ID}",
-        "fl_dashboard": "${NEXUS_DOCKER_REGISTRY_URL}/fl-dashboard:${BUILD_ID}",
-        "mlflow_server": "${NEXUS_DOCKER_REGISTRY_URL}/mlflow-server:${BUILD_ID}"
+        "flower_server": "${NEXUS_REPOSITORY_URL}/repository/docker-self-hosted/fl-pipeline/docker-images/${BUILD_ID}/flower-server-${BUILD_ID}.tar",
+        "flower_worker": "${NEXUS_REPOSITORY_URL}/repository/docker-self-hosted/fl-pipeline/docker-images/${BUILD_ID}/flower-worker-${BUILD_ID}.tar",
+        "fl_dashboard": "${NEXUS_REPOSITORY_URL}/repository/docker-self-hosted/fl-pipeline/docker-images/${BUILD_ID}/fl-dashboard-${BUILD_ID}.tar",
+        "mlflow_server": "${NEXUS_REPOSITORY_URL}/repository/docker-self-hosted/fl-pipeline/docker-images/${BUILD_ID}/mlflow-server-${BUILD_ID}.tar"
     }
 }
 EOF
