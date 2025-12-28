@@ -39,7 +39,9 @@ scrape_configs:
           app: "jenkins"
 
   - job_name: "nexus"
+    metrics_path: "/service/metrics/prometheus"
+    basic_auth:
+      username: "prometheus"
+      password: ""
     static_configs:
       - targets: ["13.215.205.125:8081"]
-        labels:
-          app: "nexus"
