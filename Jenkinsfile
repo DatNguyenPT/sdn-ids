@@ -297,7 +297,7 @@ pipeline {
                                 sha256sum *.h5 > ../signatures/checksums.sha256
                                 cd ..
                                 echo "Checksums created successfully"
-                                ls -la ../signatures/checksums.sha256
+                                ls -la signatures/checksums.sha256
                             else
                                 echo "Model file not found, creating empty checksums file"
                                 touch signatures/checksums.sha256
