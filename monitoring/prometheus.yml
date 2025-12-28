@@ -32,7 +32,7 @@ scrape_configs:
           app: "prometheus"
   
   - job_name: "jenkins"
-    metrics_path: "/prometheus"
+    metrics_path: "/prometheus/"
     static_configs:
       - targets: ["13.215.205.125:8080"]
         labels:
