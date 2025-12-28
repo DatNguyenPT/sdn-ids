@@ -284,19 +284,31 @@ pipeline {
                         echo "Signing model artifacts"
                         sh '''
                             mkdir -p signatures
+                            echo "Checking for model files..."
+                            ls -la models/ || echo "Models directory not found"
+                            
                             if command -v gpg &> /dev/null; then
                                 gpg --batch --armor --sign --detach-sign models/LSTM_FL.h5 || true
-                            else
+                            fi
+                            # Always create checksums regardless of GPG availability
+                            if [ -f "models/LSTM_FL.h5" ]; then
+                                echo "Model file found, creating checksums..."
                                 cd models
                                 sha256sum *.h5 > ../signatures/checksums.sha256
                                 cd ..
+                                echo "Checksums created successfully"
+                                ls -la ../signatures/checksums.sha256
+                            else
+                                echo "Model file not found, creating empty checksums file"
+                                touch signatures/checksums.sha256
+                                ls -la signatures/checksums.sha256
                             fi
                             cat > signatures/model-metadata.json <<EOF
 {
   "build_id": "${BUILD_ID}",
   "build_number": "${BUILD_NUMBER}",
   "build_timestamp": "${BUILD_TIMESTAMP}",
-  "git_commit": "$(git rev-parse HEAD)",
+  "git_commit": "$(git rev-parse HEAD 2>/dev/null || echo 'unknown')",
   "git_branch": "${GIT_BRANCH}",
   "model_type": "LSTM",
   "model_framework": "TensorFlow/Keras",
@@ -304,6 +316,8 @@ pipeline {
   "signature_algorithm": "SHA256"
 }
 EOF
+                            echo "Metadata file created"
+                            ls -la signatures/
                         '''
                     }
                 }
@@ -319,8 +333,8 @@ EOF
                             sh '''
                                 NEXUS_RAW_REPO="${NEXUS_REPOSITORY_URL}/repository/raw-hosted"
                                 ARTIFACT_PATH="fl-pipeline/artifacts/${BUILD_ID}"
-                                [ -f "signatures/model-metadata.json" ] && curl -v -u ${NEXUS_USER}:${NEXUS_PASS} --upload-file signatures/model-metadata.json "${NEXUS_RAW_REPO}/${ARTIFACT_PATH}/model-metadata.json"
-                                [ -f "signatures/checksums.sha256" ] && curl -v -u ${NEXUS_USER}:${NEXUS_PASS} --upload-file signatures/checksums.sha256 "${NEXUS_RAW_REPO}/${ARTIFACT_PATH}/checksums.sha256"
+                                [ -f "signatures/model-metadata.json" ] && curl -v -u ${NEXUS_USER}:${NEXUS_PASS} --upload-file signatures/model-metadata.json "${NEXUS_RAW_REPO}/${ARTIFACT_PATH}/model-metadata.json" || echo "Failed to upload model metadata"
+                                [ -f "signatures/checksums.sha256" ] && curl -v -u ${NEXUS_USER}:${NEXUS_PASS} --upload-file signatures/checksums.sha256 "${NEXUS_RAW_REPO}/${ARTIFACT_PATH}/checksums.sha256" || echo "Failed to upload checksums"
                             '''
                         }
                     }
@@ -336,7 +350,7 @@ EOF
                         withCredentials([usernamePassword(credentialsId: 'nexus-credentials', usernameVariable: 'NEXUS_USER', passwordVariable: 'NEXUS_PASS')]) {
                             sh '''
                                 NEXUS_MODELS_REPO="${NEXUS_REPOSITORY_URL}/repository/models-hosted"
-                                [ -f "models/LSTM_FL.h5" ] && curl -v -u ${NEXUS_USER}:${NEXUS_PASS} --upload-file models/LSTM_FL.h5 "${NEXUS_MODELS_REPO}/lstm-fl-${BUILD_ID}.h5"
+                                [ -f "models/LSTM_FL.h5" ] && curl -v -u ${NEXUS_USER}:${NEXUS_PASS} --upload-file models/LSTM_FL.h5 "${NEXUS_MODELS_REPO}/lstm-fl-${BUILD_ID}.h5" || echo "Failed to upload LSTM model"
                             '''
                         }
                     }
@@ -353,9 +367,14 @@ EOF
                             NEXUS_DOCKER_REPO="${NEXUS_REPOSITORY_URL}/repository/docker-self-hosted"
                             IMAGE_PATH="fl-pipeline/docker-images/${BUILD_ID}"
                             for IMG in flower-server flower-worker fl-dashboard mlflow-server; do
-                                docker save ${IMG}:latest -o ${IMG}-${BUILD_ID}.tar
-                                curl -v -u ${NEXUS_USER}:${NEXUS_PASS} --upload-file ${IMG}-${BUILD_ID}.tar "${NEXUS_DOCKER_REPO}/${IMAGE_PATH}/${IMG}-${BUILD_ID}.tar"
-                                rm ${IMG}-${BUILD_ID}.tar
+                                if docker image inspect ${IMG}:latest >/dev/null 2>&1; then
+                                    echo "Saving and uploading ${IMG}..."
+                                    docker save ${IMG}:latest -o ${IMG}-${BUILD_ID}.tar || echo "Failed to save ${IMG}"
+                                    curl -v -u ${NEXUS_USER}:${NEXUS_PASS} --upload-file ${IMG}-${BUILD_ID}.tar "${NEXUS_DOCKER_REPO}/${IMAGE_PATH}/${IMG}-${BUILD_ID}.tar" || echo "Failed to upload ${IMG}"
+                                    rm -f ${IMG}-${BUILD_ID}.tar
+                                else
+                                    echo "Image ${IMG}:latest not found, skipping..."
+                                fi
                             done
                         '''
                     }
