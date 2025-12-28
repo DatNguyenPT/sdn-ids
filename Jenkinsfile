@@ -253,7 +253,7 @@ pipeline {
                         sh '''
                             mkdir -p quality
                             which pylint || pip install pylint || true
-                            find . -name "*.py" -not -path "./__pycache__/*" -exec pylint --output-format=json \\{\\} \\\\; > quality/pylint-report.json 2>/dev/null || true
+                            find . -name "*.py" -not -path "./__pycache__/*" -exec pylint --output-format=json {} \; > quality/pylint-report.json 2>/dev/null || true
                             python -m pytest --cov=. --cov-report=xml:quality/coverage.xml --cov-report=term 2>/dev/null || true
                         '''
                     }
