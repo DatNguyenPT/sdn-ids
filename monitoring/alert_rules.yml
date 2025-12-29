@@ -1,0 +1,124 @@
+# Prometheus Alert Rules for FL Pipeline
+groups:
+  - name: jenkins_alerts
+    interval: 30s
+    rules:
+      # Alert when Jenkins build fails
+      - alert: JenkinsBuildFailure
+        expr: increase(jenkins_builds_failed_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+          service: jenkins
+        annotations:
+          summary: "Jenkins build failed"
+          description: "Build {{ $labels.job_name }} failed at {{ $labels.instance }}"
+
+      # Alert when Jenkins is down
+      - alert: JenkinsDown
+        expr: up{job="jenkins"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: jenkins
+        annotations:
+          summary: "Jenkins is down"
+          description: "Jenkins instance {{ $labels.instance }} has been down for more than 2 minutes"
+
+  - name: fl_training_alerts
+    interval: 30s
+    rules:
+      # Alert when FL training takes too long (if you expose training duration metrics)
+      - alert: FLTrainingTimeout
+        expr: fl_training_duration_seconds > 1800  # 30 minutes
+        for: 5m
+        labels:
+          severity: warning
+          service: fl-training
+        annotations:
+          summary: "FL training is taking too long"
+          description: "FL training has been running for {{ $value }} seconds"
+
+      # Alert when model accuracy drops significantly (if you expose accuracy metrics)
+      - alert: ModelAccuracyDrop
+        expr: fl_model_accuracy < 0.70
+        for: 10m
+        labels:
+          severity: warning
+          service: fl-training
+        annotations:
+          summary: "Model accuracy dropped below threshold"
+          description: "Model accuracy is {{ $value | humanizePercentage }}, below 70% threshold"
+
+  - name: infrastructure_alerts
+    interval: 30s
+    rules:
+      # Alert when Prometheus itself is down
+      - alert: PrometheusDown
+        expr: up{job="prometheus"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: prometheus
+        annotations:
+          summary: "Prometheus is down"
+          description: "Prometheus instance {{ $labels.instance }} is down"
+
+      # Alert when Nexus is down
+      - alert: NexusDown
+        expr: up{job="nexus"} == 0
+        for: 2m
+        labels:
+          severity: warning
+          service: nexus
+        annotations:
+          summary: "Nexus repository is down"
+          description: "Nexus instance {{ $labels.instance }} has been down for more than 2 minutes"
+
+      # Alert on high memory usage
+      - alert: HighMemoryUsage
+        expr: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes > 0.90
+        for: 5m
+        labels:
+          severity: warning
+          service: infrastructure
+        annotations:
+          summary: "High memory usage detected"
+          description: "Memory usage is {{ $value | humanizePercentage }} on {{ $labels.instance }}"
+
+      # Alert on high CPU usage
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
+        for: 5m
+        labels:
+          severity: warning
+          service: infrastructure
+        annotations:
+          summary: "High CPU usage detected"
+          description: "CPU usage is {{ $value | humanize }}% on {{ $labels.instance }}"
+
+  - name: container_alerts
+    interval: 30s
+    rules:
+      # Alert when Docker containers are down
+      - alert: ContainerDown
+        expr: up{job=~"flower.*|mlflow.*|dashboard.*"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: containers
+        annotations:
+          summary: "Container is down"
+          description: "Container {{ $labels.job }} on {{ $labels.instance }} has been down for more than 2 minutes"
+
+      # Alert on container restart count
+      - alert: ContainerRestarting
+        expr: rate(container_restart_count[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: containers
+        annotations:
+          summary: "Container is restarting frequently"
+          description: "Container {{ $labels.name }} is restarting frequently ({{ $value }} restarts/sec)"
+

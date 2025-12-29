@@ -1,0 +1,111 @@
+# Alertmanager configuration
+global:
+  # Default notification timeout
+  resolve_timeout: 5m
+  
+  # Email configuration - UPDATE THESE WITH YOUR SMTP SETTINGS
+  smtp_smarthost: 'smtp.gmail.com:587'  # Gmail SMTP (or use your email provider's SMTP)
+  smtp_from: 'datnpt2004@gmail.com'     # UPDATE: Your sender email address
+  smtp_auth_username: 'datnpt2004@gmail.com'  # UPDATE: Your email address
+  smtp_auth_password: ''      # UPDATE: Your email app password or password
+  smtp_hello: 'alertmanager'
+  smtp_require_tls: true
+
+# Route configuration - defines how alerts are routed
+route:
+  # Default receiver for all alerts
+  receiver: 'default-receiver'
+  
+  # Group alerts by these labels
+  group_by: ['alertname', 'cluster', 'service']
+  
+  # Wait time before sending first notification
+  group_wait: 10s
+  
+  # Wait time before sending notification about new alerts in group
+  group_interval: 10s
+  
+  # Minimum time between two notifications about the same group
+  repeat_interval: 12h
+  
+  # Child routes (more specific routing can be added here)
+  routes:
+    # Critical alerts (high priority)
+    - match:
+        severity: critical
+      receiver: 'critical-receiver'
+      repeat_interval: 1h
+    
+    # Warning alerts
+    - match:
+        severity: warning
+      receiver: 'warning-receiver'
+      repeat_interval: 6h
+
+# Receivers - define where alerts are sent
+receivers:
+  # Default receiver - sends to default email
+  - name: 'default-receiver'
+    email_configs:
+      - to: 'your-email@gmail.com'  # UPDATE: Your email address for all alerts
+        headers:
+          Subject: 'Alert: {{ .GroupLabels.alertname }}'
+        html: |
+          <h2>Alert Details</h2>
+          <p><strong>Alert:</strong> {{ .GroupLabels.alertname }}</p>
+          <p><strong>Severity:</strong> {{ .GroupLabels.severity }}</p>
+          <p><strong>Service:</strong> {{ .GroupLabels.service }}</p>
+          <hr>
+          <p><strong>Description:</strong></p>
+          <p>{{ range .Alerts }}{{ .Annotations.description }}{{ end }}</p>
+          <hr>
+          <p><small>Alert fired at {{ .StartsAt }}</small></p>
+        send_resolved: true
+  
+  # Critical alerts receiver - sends to admin email
+  - name: 'critical-receiver'
+    email_configs:
+      - to: 'admin@yourdomain.com'  # UPDATE: Admin email for critical alerts
+        headers:
+          Subject: '🚨 CRITICAL: {{ .GroupLabels.alertname }}'
+        html: |
+          <h2 style="color: red;">🚨 CRITICAL ALERT</h2>
+          <p><strong>Alert Name:</strong> {{ .GroupLabels.alertname }}</p>
+          <p><strong>Service:</strong> {{ .GroupLabels.service }}</p>
+          <p><strong>Instance:</strong> {{ .GroupLabels.instance }}</p>
+          <hr>
+          <p><strong>Summary:</strong> {{ range .Alerts }}{{ .Annotations.summary }}{{ end }}</p>
+          <p><strong>Description:</strong></p>
+          <p>{{ range .Alerts }}{{ .Annotations.description }}{{ end }}</p>
+          <hr>
+          <p><small>Alert started at: {{ .StartsAt }}</small></p>
+        send_resolved: true
+  
+  # Warning alerts receiver - sends to team email
+  - name: 'warning-receiver'
+    email_configs:
+      - to: 'team@yourdomain.com'  # UPDATE: Team email for warnings
+        headers:
+          Subject: '⚠️ Warning: {{ .GroupLabels.alertname }}'
+        html: |
+          <h2 style="color: orange;">⚠️ Warning Alert</h2>
+          <p><strong>Alert Name:</strong> {{ .GroupLabels.alertname }}</p>
+          <p><strong>Service:</strong> {{ .GroupLabels.service }}</p>
+          <p><strong>Instance:</strong> {{ .GroupLabels.instance }}</p>
+          <hr>
+          <p><strong>Summary:</strong> {{ range .Alerts }}{{ .Annotations.summary }}{{ end }}</p>
+          <p><strong>Description:</strong></p>
+          <p>{{ range .Alerts }}{{ .Annotations.description }}{{ end }}</p>
+          <hr>
+          <p><small>Alert started at: {{ .StartsAt }}</small></p>
+        send_resolved: true
+
+# Inhibition rules - suppress certain alerts when others are firing
+inhibit_rules:
+  # Suppress warnings when critical alerts are firing
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'instance']
+
