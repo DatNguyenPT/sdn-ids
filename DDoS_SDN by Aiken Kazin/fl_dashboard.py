@@ -452,7 +452,13 @@ DASHBOARD_HTML = """
             // Render charts for each model
             modelTypes.forEach(modelType => {
                 const modelData = data.models[modelType];
-                const rounds = modelData.rounds || [];
+                const totalRounds = modelData.total_rounds || 5;
+                const actualRounds = modelData.rounds || [];
+                // Ensure rounds array includes all rounds from 1 to total_rounds
+                const rounds = [];
+                for (let i = 1; i <= totalRounds; i++) {
+                    rounds.push(i);
+                }
                 const accuracies = modelData.aggregation.accuracies || [];
                 const losses = modelData.aggregation.losses || [];
                 const bytesSent = modelData.network.bytes_sent_per_round || [];
@@ -461,12 +467,41 @@ DASHBOARD_HTML = """
                 const paramsReceived = modelData.params_received_per_round || [];
                 const dpEpsilonPerRound = modelData.dp ? (modelData.dp.epsilon_per_round || []) : [];
                 
+                // Pad arrays to match total rounds length
+                const padArray = (arr, length, defaultValue = 0) => {
+                    const padded = [...arr];
+                    while (padded.length < length) {
+                        padded.push(defaultValue);
+                    }
+                    return padded;
+                };
+                
+                // Map actual round data to full rounds array
+                const mapToRounds = (arr, actualRounds) => {
+                    const mapped = new Array(totalRounds).fill(0);
+                    actualRounds.forEach((round, idx) => {
+                        if (round >= 1 && round <= totalRounds && idx < arr.length) {
+                            mapped[round - 1] = arr[idx];
+                        }
+                    });
+                    return mapped;
+                };
+                
+                const mappedAccuracies = mapToRounds(accuracies, actualRounds);
+                const mappedLosses = mapToRounds(losses, actualRounds);
+                const mappedBytesSent = mapToRounds(bytesSent, actualRounds);
+                const mappedBytesReceived = mapToRounds(bytesReceived, actualRounds);
+                const mappedParamsSent = mapToRounds(paramsSent, actualRounds);
+                const mappedParamsReceived = mapToRounds(paramsReceived, actualRounds);
+                const mappedDpEpsilon = mapToRounds(dpEpsilonPerRound, actualRounds);
+                
                 // DP Epsilon chart (if DP is enabled)
-                if (modelData.dp && modelData.dp.enabled && dpEpsilonPerRound.length > 0) {
+                if (modelData.dp && modelData.dp.enabled && mappedDpEpsilon.some(v => v > 0)) {
+                    const cumulativeEpsilon = mappedDpEpsilon.map((_, i, arr) => arr.slice(0, i + 1).reduce((a, b) => a + b, 0));
                     Plotly.newPlot(`chart-${modelType}-dp`, [
                         {
-                            x: rounds.slice(0, dpEpsilonPerRound.length),
-                            y: dpEpsilonPerRound,
+                            x: rounds,
+                            y: mappedDpEpsilon,
                             name: 'Epsilon (ε)',
                             type: 'scatter',
                             mode: 'lines+markers',
@@ -476,8 +511,8 @@ DASHBOARD_HTML = """
                             fillcolor: 'rgba(25, 118, 210, 0.1)'
                         },
                         {
-                            x: rounds.slice(0, dpEpsilonPerRound.length),
-                            y: dpEpsilonPerRound.map((_, i, arr) => arr.slice(0, i + 1).reduce((a, b) => a + b, 0)),
+                            x: rounds,
+                            y: cumulativeEpsilon,
                             name: 'Cumulative ε',
                             type: 'scatter',
                             mode: 'lines+markers',
@@ -485,7 +520,12 @@ DASHBOARD_HTML = """
                             marker: { size: 8, color: '#0d47a1' }
                         }
                     ], {
-                        xaxis: { title: 'Round' },
+                        xaxis: { 
+                            title: 'Round',
+                            tickmode: 'linear',
+                            dtick: 1,
+                            tick0: 1
+                        },
                         yaxis: { title: 'Epsilon (ε)', side: 'left' },
                         hovermode: 'x unified',
                         margin: { l: 50, r: 50, t: 20, b: 50 },
@@ -501,7 +541,7 @@ DASHBOARD_HTML = """
                 Plotly.newPlot(`chart-${modelType}-accuracy`, [
                     {
                         x: rounds,
-                        y: accuracies.map(a => a * 100),
+                        y: mappedAccuracies.map(a => a * 100),
                         name: 'Accuracy',
                         type: 'scatter',
                         mode: 'lines+markers',
@@ -510,7 +550,7 @@ DASHBOARD_HTML = """
                     },
                     {
                         x: rounds,
-                        y: losses,
+                        y: mappedLosses,
                         name: 'Loss',
                         yaxis: 'y2',
                         type: 'scatter',
@@ -519,7 +559,12 @@ DASHBOARD_HTML = """
                         marker: { size: 8 }
                     }
                 ], {
-                    xaxis: { title: 'Round' },
+                    xaxis: { 
+                        title: 'Round',
+                        tickmode: 'linear',
+                        dtick: 1,
+                        tick0: 1
+                    },
                     yaxis: { title: 'Accuracy (%)', side: 'left' },
                     yaxis2: { title: 'Loss', overlaying: 'y', side: 'right' },
                     hovermode: 'x unified',
@@ -531,20 +576,25 @@ DASHBOARD_HTML = """
                 Plotly.newPlot(`chart-${modelType}-network`, [
                     {
                         x: rounds,
-                        y: bytesSent.map(b => b / 1024 / 1024),
+                        y: mappedBytesSent.map(b => b / 1024 / 1024),
                         name: 'Bytes Sent',
                         type: 'bar',
                         marker: { color: '#2196f3' }
                     },
                     {
                         x: rounds,
-                        y: bytesReceived.map(b => b / 1024 / 1024),
+                        y: mappedBytesReceived.map(b => b / 1024 / 1024),
                         name: 'Bytes Received',
                         type: 'bar',
                         marker: { color: '#ff9800' }
                     }
                 ], {
-                    xaxis: { title: 'Round' },
+                    xaxis: { 
+                        title: 'Round',
+                        tickmode: 'linear',
+                        dtick: 1,
+                        tick0: 1
+                    },
                     yaxis: { title: 'MB' },
                     barmode: 'group',
                     hovermode: 'x unified',
@@ -555,26 +605,31 @@ DASHBOARD_HTML = """
                 Plotly.newPlot(`chart-${modelType}-params`, [
                     {
                         x: rounds,
-                        y: paramsSent,
+                        y: mappedParamsSent,
                         name: 'Params Sent',
                         type: 'bar',
                         marker: { color: '#00bcd4' },
-                        text: paramsSent.map(p => p.toLocaleString()),
+                        text: mappedParamsSent.map(p => p.toLocaleString()),
                         textposition: 'outside',
                         hovertemplate: '<b>Round %{x}</b><br>Params Sent: %{text}<extra></extra>'
                     },
                     {
                         x: rounds,
-                        y: paramsReceived,
+                        y: mappedParamsReceived,
                         name: 'Params Received',
                         type: 'bar',
                         marker: { color: '#ff5722' },
-                        text: paramsReceived.map(p => p.toLocaleString()),
+                        text: mappedParamsReceived.map(p => p.toLocaleString()),
                         textposition: 'outside',
                         hovertemplate: '<b>Round %{x}</b><br>Params Received: %{text}<extra></extra>'
                     }
                 ], {
-                    xaxis: { title: 'Round' },
+                    xaxis: { 
+                        title: 'Round',
+                        tickmode: 'linear',
+                        dtick: 1,
+                        tick0: 1
+                    },
                     yaxis: { title: 'Number of Parameters', type: 'log' },
                     barmode: 'group',
                     hovermode: 'x unified',
