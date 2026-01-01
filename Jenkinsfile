@@ -4,7 +4,7 @@ pipeline {
     environment {
         PROJECT_DIR = "DDoS_SDN by Aiken Kazin"
         DOCKER_COMPOSE_FILE = "docker-compose.ci.yml"
-        NEXUS_REPOSITORY_URL = "http://localhost:8081"
+        NEXUS_REPOSITORY_URL = "http://13.215.205.125:8081"
         NEXUS_REPOSITORY_ID = "nexus-repo"
         BUILD_TIMESTAMP = "${BUILD_ID}-${BUILD_TIMESTAMP}"
     }
@@ -358,24 +358,54 @@ EOF
             }
         }
 
-        stage('Stage 16 - Upload Docker Images to Nexus') {
+        // stage('Stage 16 - Upload Docker Images to Nexus') {
+        //     steps {
+        //         script {
+        //             echo "Uploading Docker images to Nexus"
+        //             withCredentials([usernamePassword(credentialsId: 'nexus-credentials', usernameVariable: 'NEXUS_USER', passwordVariable: 'NEXUS_PASS')]) {
+        //                 sh '''
+        //                     NEXUS_DOCKER_REPO="${NEXUS_REPOSITORY_URL}/repository/docker-self-hosted"
+        //                     IMAGE_PATH="fl-pipeline/docker-images/${BUILD_ID}"
+        //                     for IMG in flower-server flower-worker fl-dashboard mlflow-server; do
+        //                         if docker image inspect ${IMG}:latest >/dev/null 2>&1; then
+        //                             echo "Saving and uploading ${IMG}..."
+        //                             docker save ${IMG}:latest -o ${IMG}-${BUILD_ID}.tar || echo "Failed to save ${IMG}"
+        //                             curl -v -u ${NEXUS_USER}:${NEXUS_PASS} --upload-file ${IMG}-${BUILD_ID}.tar "${NEXUS_DOCKER_REPO}/${IMAGE_PATH}/${IMG}-${BUILD_ID}.tar" || echo "Failed to upload ${IMG}"
+        //                             rm -f ${IMG}-${BUILD_ID}.tar
+        //                         else
+        //                             echo "Image ${IMG}:latest not found, skipping..."
+        //                         fi
+        //                     done
+        //                 '''
+        //             }
+        //         }
+        //     }
+        // }
+
+        stage('Stage 16 - Push Docker Images to Nexus Registry') {
             steps {
                 script {
-                    echo "Uploading Docker images to Nexus"
+                    echo "Pushing Docker images to Nexus Docker Registry"
                     withCredentials([usernamePassword(credentialsId: 'nexus-credentials', usernameVariable: 'NEXUS_USER', passwordVariable: 'NEXUS_PASS')]) {
                         sh '''
-                            NEXUS_DOCKER_REPO="${NEXUS_REPOSITORY_URL}/repository/docker-self-hosted"
-                            IMAGE_PATH="fl-pipeline/docker-images/${BUILD_ID}"
+                            # Log in to Nexus Docker registry
+                            echo "${NEXUS_PASS}" | docker login -u "${NEXUS_USER}" --password-stdin 13.215.205.125:5000
+                            
+                            # Tag and push images
                             for IMG in flower-server flower-worker fl-dashboard mlflow-server; do
                                 if docker image inspect ${IMG}:latest >/dev/null 2>&1; then
-                                    echo "Saving and uploading ${IMG}..."
-                                    docker save ${IMG}:latest -o ${IMG}-${BUILD_ID}.tar || echo "Failed to save ${IMG}"
-                                    curl -v -u ${NEXUS_USER}:${NEXUS_PASS} --upload-file ${IMG}-${BUILD_ID}.tar "${NEXUS_DOCKER_REPO}/${IMAGE_PATH}/${IMG}-${BUILD_ID}.tar" || echo "Failed to upload ${IMG}"
-                                    rm -f ${IMG}-${BUILD_ID}.tar
+                                    echo "Tagging and pushing ${IMG}..."
+                                    docker tag ${IMG}:latest 13.215.205.125:5000/${IMG}:${BUILD_ID}
+                                    docker tag ${IMG}:latest 13.215.205.125:5000/${IMG}:latest
+                                    docker push 13.215.205.125:5000/${IMG}:${BUILD_ID}
+                                    docker push 13.215.205.125:5000/${IMG}:latest
                                 else
                                     echo "Image ${IMG}:latest not found, skipping..."
                                 fi
                             done
+                            
+                            # Logout
+                            docker logout 13.215.205.125:5000
                         '''
                     }
                 }
