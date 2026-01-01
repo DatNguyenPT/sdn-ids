@@ -388,6 +388,12 @@ EOF
                     echo "Pushing Docker images to Nexus Docker Registry"
                     withCredentials([usernamePassword(credentialsId: 'nexus-credentials', usernameVariable: 'NEXUS_USER', passwordVariable: 'NEXUS_PASS')]) {
                         sh '''
+                            # Configure Docker for insecure registry
+                            sudo mkdir -p /etc/docker
+                            echo '{"insecure-registries": ["13.215.205.125:5000"]}' | sudo tee /etc/docker/daemon.json > /dev/null
+                            sudo systemctl restart docker || sudo service docker restart || true
+                            sleep 5
+                            
                             # Log in to Nexus Docker registry
                             echo "${NEXUS_PASS}" | docker login -u "${NEXUS_USER}" --password-stdin 13.215.205.125:5000
                             
