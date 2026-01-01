@@ -324,95 +324,63 @@ EOF
             }
         }
 
-        stage('Stage 14 - Upload Artifacts to Nexus') {
-            steps {
-                dir(env.PROJECT_DIR) {
-                    script {
-                        echo "Uploading artifacts to Nexus"
-                        withCredentials([usernamePassword(credentialsId: 'nexus-credentials', usernameVariable: 'NEXUS_USER', passwordVariable: 'NEXUS_PASS')]) {
-                            sh '''
-                                NEXUS_RAW_REPO="${NEXUS_REPOSITORY_URL}/repository/raw-hosted"
-                                ARTIFACT_PATH="fl-pipeline/artifacts/${BUILD_ID}"
-                                [ -f "signatures/model-metadata.json" ] && curl -v -u ${NEXUS_USER}:${NEXUS_PASS} --upload-file signatures/model-metadata.json "${NEXUS_RAW_REPO}/${ARTIFACT_PATH}/model-metadata.json" || echo "Failed to upload model metadata"
-                                [ -f "signatures/checksums.sha256" ] && curl -v -u ${NEXUS_USER}:${NEXUS_PASS} --upload-file signatures/checksums.sha256 "${NEXUS_RAW_REPO}/${ARTIFACT_PATH}/checksums.sha256" || echo "Failed to upload checksums"
-                            '''
+        stage('Upload to Nexus Parallel') {
+            parallel {
+                stage('Stage 14 - Upload Artifacts to Nexus') {
+                    steps {
+                        dir(env.PROJECT_DIR) {
+                            script {
+                                echo "Uploading artifacts to Nexus"
+                                withCredentials([usernamePassword(credentialsId: 'nexus-credentials', usernameVariable: 'NEXUS_USER', passwordVariable: 'NEXUS_PASS')]) {
+                                    sh '''
+                                        NEXUS_RAW_REPO="${NEXUS_REPOSITORY_URL}/repository/raw-hosted"
+                                        ARTIFACT_PATH="fl-pipeline/artifacts/${BUILD_ID}"
+                                        [ -f "signatures/model-metadata.json" ] && curl -v -u ${NEXUS_USER}:${NEXUS_PASS} --upload-file signatures/model-metadata.json "${NEXUS_RAW_REPO}/${ARTIFACT_PATH}/model-metadata.json" || echo "Failed to upload model metadata"
+                                        [ -f "signatures/checksums.sha256" ] && curl -v -u ${NEXUS_USER}:${NEXUS_PASS} --upload-file signatures/checksums.sha256 "${NEXUS_RAW_REPO}/${ARTIFACT_PATH}/checksums.sha256" || echo "Failed to upload checksums"
+                                    '''
+                                }
+                            }
                         }
                     }
                 }
-            }
-        }
 
-        stage('Stage 15 - Upload Model to Nexus') {
-            steps {
-                dir(env.PROJECT_DIR) {
-                    script {
-                        echo "Uploading models to Nexus"
-                        withCredentials([usernamePassword(credentialsId: 'nexus-credentials', usernameVariable: 'NEXUS_USER', passwordVariable: 'NEXUS_PASS')]) {
-                            sh '''
-                                NEXUS_MODELS_REPO="${NEXUS_REPOSITORY_URL}/repository/models-hosted"
-                                [ -f "models/LSTM_FL.h5" ] && curl -v -u ${NEXUS_USER}:${NEXUS_PASS} --upload-file models/LSTM_FL.h5 "${NEXUS_MODELS_REPO}/lstm-fl-${BUILD_ID}.h5" || echo "Failed to upload LSTM model"
-                            '''
+                stage('Stage 15 - Upload Model to Nexus') {
+                    steps {
+                        dir(env.PROJECT_DIR) {
+                            script {
+                                echo "Uploading models to Nexus"
+                                withCredentials([usernamePassword(credentialsId: 'nexus-credentials', usernameVariable: 'NEXUS_USER', passwordVariable: 'NEXUS_PASS')]) {
+                                    sh '''
+                                        NEXUS_MODELS_REPO="${NEXUS_REPOSITORY_URL}/repository/models-hosted"
+                                        [ -f "models/LSTM_FL.h5" ] && curl -v -u ${NEXUS_USER}:${NEXUS_PASS} --upload-file models/LSTM_FL.h5 "${NEXUS_MODELS_REPO}/lstm-fl-${BUILD_ID}.h5" || echo "Failed to upload LSTM model"
+                                    '''
+                                }
+                            }
                         }
                     }
                 }
-            }
-        }
 
-        // stage('Stage 16 - Upload Docker Images to Nexus') {
-        //     steps {
-        //         script {
-        //             echo "Uploading Docker images to Nexus"
-        //             withCredentials([usernamePassword(credentialsId: 'nexus-credentials', usernameVariable: 'NEXUS_USER', passwordVariable: 'NEXUS_PASS')]) {
-        //                 sh '''
-        //                     NEXUS_DOCKER_REPO="${NEXUS_REPOSITORY_URL}/repository/docker-self-hosted"
-        //                     IMAGE_PATH="fl-pipeline/docker-images/${BUILD_ID}"
-        //                     for IMG in flower-server flower-worker fl-dashboard mlflow-server; do
-        //                         if docker image inspect ${IMG}:latest >/dev/null 2>&1; then
-        //                             echo "Saving and uploading ${IMG}..."
-        //                             docker save ${IMG}:latest -o ${IMG}-${BUILD_ID}.tar || echo "Failed to save ${IMG}"
-        //                             curl -v -u ${NEXUS_USER}:${NEXUS_PASS} --upload-file ${IMG}-${BUILD_ID}.tar "${NEXUS_DOCKER_REPO}/${IMAGE_PATH}/${IMG}-${BUILD_ID}.tar" || echo "Failed to upload ${IMG}"
-        //                             rm -f ${IMG}-${BUILD_ID}.tar
-        //                         else
-        //                             echo "Image ${IMG}:latest not found, skipping..."
-        //                         fi
-        //                     done
-        //                 '''
-        //             }
-        //         }
-        //     }
-        // }
-
-        stage('Stage 16 - Push Docker Images to Nexus Registry') {
-            steps {
-                script {
-                    echo "Pushing Docker images to Nexus Docker Registry"
-                    withCredentials([usernamePassword(credentialsId: 'nexus-credentials', usernameVariable: 'NEXUS_USER', passwordVariable: 'NEXUS_PASS')]) {
-                        sh '''
-                            # Configure Docker for insecure registry
-                            sudo mkdir -p /etc/docker
-                            echo '{"insecure-registries": ["13.215.205.125:5000"]}' | sudo tee /etc/docker/daemon.json > /dev/null
-                            sudo systemctl restart docker || sudo service docker restart || true
-                            sleep 5
-                            
-                            # Log in to Nexus Docker registry
-                            echo "${NEXUS_PASS}" | docker login -u "${NEXUS_USER}" --password-stdin 13.215.205.125:5000
-                            
-                            # Tag and push images
-                            for IMG in flower-server flower-worker fl-dashboard mlflow-server; do
-                                if docker image inspect ${IMG}:latest >/dev/null 2>&1; then
-                                    echo "Tagging and pushing ${IMG}..."
-                                    docker tag ${IMG}:latest 13.215.205.125:5000/${IMG}:${BUILD_ID}
-                                    docker tag ${IMG}:latest 13.215.205.125:5000/${IMG}:latest
-                                    docker push 13.215.205.125:5000/${IMG}:${BUILD_ID}
-                                    docker push 13.215.205.125:5000/${IMG}:latest
-                                else
-                                    echo "Image ${IMG}:latest not found, skipping..."
-                                fi
-                            done
-                            
-                            # Logout
-                            docker logout 13.215.205.125:5000
-                        '''
+                stage('Stage 16 - Upload Docker Images to Nexus') {
+                    steps {
+                        script {
+                            echo "Uploading Docker images to Nexus"
+                            withCredentials([usernamePassword(credentialsId: 'nexus-credentials', usernameVariable: 'NEXUS_USER', passwordVariable: 'NEXUS_PASS')]) {
+                                sh '''
+                                    NEXUS_DOCKER_REPO="${NEXUS_REPOSITORY_URL}/repository/docker-self-hosted"
+                                    IMAGE_PATH="fl-pipeline/docker-images/${BUILD_ID}"
+                                    for IMG in flower-server flower-worker fl-dashboard mlflow-server; do
+                                        if docker image inspect ${IMG}:latest >/dev/null 2>&1; then
+                                            echo "Saving and uploading ${IMG}..."
+                                            docker save ${IMG}:latest -o ${IMG}-${BUILD_ID}.tar || echo "Failed to save ${IMG}"
+                                            curl -v -u ${NEXUS_USER}:${NEXUS_PASS} --upload-file ${IMG}-${BUILD_ID}.tar "${NEXUS_DOCKER_REPO}/${IMAGE_PATH}/${IMG}-${BUILD_ID}.tar" || echo "Failed to upload ${IMG}"
+                                            rm -f ${IMG}-${BUILD_ID}.tar
+                                        else
+                                            echo "Image ${IMG}:latest not found, skipping..."
+                                        fi
+                                    done
+                                '''
+                            }
+                        }
                     }
                 }
             }
